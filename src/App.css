@@ -1251,3 +1251,29 @@ input:checked + .slider:before {
   color: var(--accent-secondary) !important;
 }
 
+/* Tree Item Row Hover Actions */
+.tree-item {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.tree-item-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+.tree-item:hover .tree-item-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (max-width: 768px) {
+  .tree-item-actions {
+    opacity: 0.7;
+    pointer-events: auto;
+  }
+}
+

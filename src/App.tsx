@@ -7,6 +7,7 @@ import { material } from '@uiw/codemirror-theme-material';
 import { tokyoNight } from '@uiw/codemirror-theme-tokyo-night';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Capacitor } from '@capacitor/core';
+import { FilePicker } from '@capawesome/capacitor-file-picker';
 
 const themesMap: Record<string, any> = {
   dracula,
@@ -42,6 +43,7 @@ import {
   Filter,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   FilePlus,
   FolderPlus,
   FolderMinus,
@@ -511,13 +513,12 @@ export default function App() {
   const [showNewFolderModal, setShowNewFolderModal] = useState<boolean>(false);
   const [newFolderName, setNewFolderName] = useState<string>('');
 
-  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [deleteTargetName, setDeleteTargetName] = useState<string>('');
+
 
   const [showGitModal, setShowGitModal] = useState<boolean>(false);
   const [gitRepoUrl, setGitRepoUrl] = useState<string>('');
 
-
+  const [selectedDetailModuleId, setSelectedDetailModuleId] = useState<string | null>(null);
 
   // Empty folders track
   const [emptyFolders, setEmptyFolders] = useState<string[]>([]);
@@ -667,10 +668,103 @@ export default function App() {
     setShowRenameModal(false);
   };
 
-  const handleDeleteFile = (fileName: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDeleteTargetName(fileName);
-    setShowDeleteModal(true);
+  const deletePath = async (pathName: string) => {
+    const isFolder = emptyFolders.includes(pathName) || files.some(f => f.name.startsWith(pathName + '/'));
+    if (Capacitor.isNativePlatform()) {
+      if (isFolder) {
+        await Filesystem.rmdir({
+          path: pathName,
+          directory: Directory.Data,
+          recursive: true
+        }).catch(err => console.error("Error deleting native folder:", err));
+      } else {
+        await Filesystem.deleteFile({
+          path: pathName,
+          directory: Directory.Data
+        }).catch(err => console.error("Error deleting native file:", err));
+      }
+    }
+
+    const nextFiles = files.filter(f => f.name !== pathName && !f.name.startsWith(pathName + '/'));
+    setFiles(nextFiles);
+    setEmptyFolders(prev => prev.filter(f => f !== pathName && !f.startsWith(pathName + '/')));
+    setOpenTabs(prev => prev.filter(t => t !== pathName && !t.startsWith(pathName + '/')));
+
+    if (activeFileName === pathName || activeFileName.startsWith(pathName + '/')) {
+      if (nextFiles.length > 0) {
+        setActiveFileName(nextFiles[0].name);
+      } else {
+        setActiveFileName('Welcome');
+      }
+    }
+  };
+
+  const handleCreateFileInFolder = (parentFolder: string) => {
+    const fileNameInput = prompt("Enter new file name:");
+    if (!fileNameInput || !fileNameInput.trim()) return;
+    const cleanFileName = fileNameInput.trim();
+    const newFilePath = `${parentFolder}/${cleanFileName}`;
+
+    if (files.some(f => f.name.toLowerCase() === newFilePath.toLowerCase())) {
+      alert('A file with this name already exists.');
+      return;
+    }
+
+    const extension = cleanFileName.split('.').pop()?.toLowerCase() || '';
+    let language = 'text';
+    if (['html', 'htm'].includes(extension)) language = 'html';
+    else if (extension === 'css') language = 'css';
+    else if (['js', 'jsx', 'ts', 'tsx'].includes(extension)) language = 'javascript';
+    else if (extension === 'py') language = 'python';
+    else if (['md', 'markdown'].includes(extension)) language = 'markdown';
+
+    const newFile: VirtualFile = {
+      name: newFilePath,
+      content: '',
+      language
+    };
+
+    setFiles(prev => [...prev, newFile]);
+    setActiveFileName(newFilePath);
+    if (!openTabs.includes(newFilePath)) {
+      setOpenTabs(prev => [...prev, newFilePath]);
+    }
+
+    if (Capacitor.isNativePlatform()) {
+      Filesystem.writeFile({
+        path: newFilePath,
+        data: '',
+        directory: Directory.Data,
+        encoding: Encoding.UTF8,
+        recursive: true
+      }).catch(err => console.error("Error creating native file:", err));
+    }
+
+    setExpandedFolders(prev => ({ ...prev, [parentFolder]: true }));
+  };
+
+  const handleCreateFolderInFolder = (parentFolder: string) => {
+    const folderNameInput = prompt("Enter new folder name:");
+    if (!folderNameInput || !folderNameInput.trim()) return;
+    const cleanFolderName = folderNameInput.trim();
+    const newFolderPath = `${parentFolder}/${cleanFolderName}`;
+
+    if (emptyFolders.includes(newFolderPath)) {
+      alert("Folder already exists.");
+      return;
+    }
+
+    setEmptyFolders(prev => [...prev, newFolderPath]);
+
+    if (Capacitor.isNativePlatform()) {
+      Filesystem.mkdir({
+        path: newFolderPath,
+        directory: Directory.Data,
+        recursive: true
+      }).catch(err => console.error("Error creating native folder:", err));
+    }
+
+    setExpandedFolders(prev => ({ ...prev, [parentFolder]: true, [newFolderPath]: true }));
   };
 
   const handleEditorChange = (value: string) => {
@@ -837,8 +931,100 @@ export default function App() {
 
 
 
-  const handleOpenFolder = () => {
-    document.getElementById('folder-picker')?.click();
+  const readExternalDirRecursive = async (
+    absolutePath: string, 
+    relativePrefix: string = '', 
+    allFiles: VirtualFile[] = [], 
+    allFolders: Set<string> = new Set()
+  ): Promise<{ files: VirtualFile[], folders: string[] }> => {
+    const res = await Filesystem.readdir({
+      path: absolutePath
+    });
+
+    for (const file of res.files) {
+      const isDir = file.type === 'directory';
+      const fileRelPath = relativePrefix ? `${relativePrefix}/${file.name}` : file.name;
+      const fileAbsPath = `${absolutePath}/${file.name}`;
+
+      if (isDir) {
+        allFolders.add(fileRelPath);
+        await readExternalDirRecursive(fileAbsPath, fileRelPath, allFiles, allFolders);
+      } else {
+        const contentRes = await Filesystem.readFile({
+          path: fileAbsPath,
+          encoding: Encoding.UTF8
+        }).catch(() => ({ data: '' }));
+
+        allFiles.push({
+          name: fileRelPath,
+          content: contentRes.data as string,
+          language: getLanguageFromExtension(file.name)
+        });
+      }
+    }
+
+    return {
+      files: allFiles,
+      folders: Array.from(allFolders)
+    };
+  };
+
+  const handleOpenFolder = async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const result = await FilePicker.pickDirectory();
+        if (!result || !result.path) return;
+        
+        // Show loading progress
+        setLoadingProgress(15);
+        setLoadingText("Accessing native folder tree...");
+        setAppLoaded(false);
+
+        const data = await readExternalDirRecursive(result.path);
+        
+        // Sync these files with App sandboxed Directory.Data so offline preview has them
+        setLoadingProgress(60);
+        setLoadingText("Synchronizing files to offline workspace...");
+        
+        for (const folder of data.folders) {
+          await Filesystem.mkdir({
+            path: folder,
+            directory: Directory.Data,
+            recursive: true
+          }).catch(() => {});
+        }
+        for (const f of data.files) {
+          await Filesystem.writeFile({
+            path: f.name,
+            data: f.content,
+            directory: Directory.Data,
+            encoding: Encoding.UTF8,
+            recursive: true
+          }).catch(() => {});
+        }
+
+        setFiles(data.files);
+        setEmptyFolders(data.folders);
+        setIsFolderOpen(true);
+        setAppLoaded(true);
+
+        if (data.files.length > 0) {
+          const firstFile = data.files[0].name;
+          setActiveFileName(firstFile);
+          setOpenTabs(['Welcome', firstFile]);
+        }
+        
+        // Extract root folder name
+        const folderName = result.path.split('/').pop() || 'Project';
+        alert(`Successfully imported folder "${folderName}" with ${data.files.length} files!`);
+      } catch (err: any) {
+        setAppLoaded(true);
+        console.error("Directory picking failed:", err);
+        alert(`Failed to open folder: ${err.message || err}`);
+      }
+    } else {
+      document.getElementById('folder-picker')?.click();
+    }
   };
 
   const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1048,39 +1234,7 @@ export default function App() {
     setShowNewFolderModal(false);
   };
 
-  const handleDeleteConfirm = () => {
-    const fileName = deleteTargetName;
-    
-    if (Capacitor.isNativePlatform()) {
-      const isFolder = emptyFolders.includes(fileName);
-      if (isFolder) {
-        Filesystem.rmdir({
-          path: fileName,
-          directory: Directory.Data,
-          recursive: true
-        }).catch(err => console.error("Error deleting native folder:", err));
-      } else {
-        Filesystem.deleteFile({
-          path: fileName,
-          directory: Directory.Data
-        }).catch(err => console.error("Error deleting native file:", err));
-      }
-    }
 
-    const nextFiles = files.filter(f => f.name !== fileName && !f.name.startsWith(fileName + '/'));
-    setFiles(nextFiles);
-    setEmptyFolders(prev => prev.filter(f => f !== fileName && !f.startsWith(fileName + '/')));
-    setOpenTabs(prev => prev.filter(t => t !== fileName && !t.startsWith(fileName + '/')));
-
-    if (activeFileName === fileName || activeFileName.startsWith(fileName + '/')) {
-      if (nextFiles.length > 0) {
-        setActiveFileName(nextFiles[0].name);
-      } else {
-        setActiveFileName('Welcome');
-      }
-    }
-    setShowDeleteModal(false);
-  };
 
   const handleOpenSettings = () => {
     setActiveFileName('Settings');
@@ -1716,18 +1870,54 @@ export default function App() {
             <span className="tree-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
           </div>
 
-          {/* Delete File Button (only for files) */}
-          {!isFolder && (
-            <button 
-              className="file-delete-btn"
-              onClick={(e) => {
-                handleDeleteFile(node.path, e);
-              }}
-              title="Delete File"
-            >
-              <Trash2 size={12} />
-            </button>
-          )}
+          {/* Row Actions Panel */}
+          <div className="tree-item-actions" onClick={(e) => e.stopPropagation()}>
+            {isFolder ? (
+              <>
+                <button 
+                  className="file-action-icon-btn" 
+                  onClick={() => handleCreateFolderInFolder(node.path)}
+                  title="New Folder"
+                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  <FolderPlus size={12} />
+                </button>
+                <button 
+                  className="file-action-icon-btn" 
+                  onClick={() => handleCreateFileInFolder(node.path)}
+                  title="New File"
+                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                >
+                  <FilePlus size={12} />
+                </button>
+                <button 
+                  className="file-action-icon-btn" 
+                  onClick={() => {
+                    if (confirm(`Are you sure you want to delete folder "${node.name}" and all its contents?`)) {
+                      deletePath(node.path);
+                    }
+                  }}
+                  title="Delete Folder"
+                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--accent-error)', cursor: 'pointer' }}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </>
+            ) : (
+              <button 
+                className="file-action-icon-btn" 
+                onClick={() => {
+                  if (confirm(`Are you sure you want to delete file "${node.name}"?`)) {
+                    deletePath(node.path);
+                  }
+                }}
+                title="Delete File"
+                style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--accent-error)', cursor: 'pointer' }}
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Nested Children */}
@@ -2076,194 +2266,268 @@ export default function App() {
 
               {activeSidebarTab === 'modules' && (
                 <>
-                  <div className="sidebar-header">
-                    <span className="sidebar-title">Modules</span>
-                    <button 
-                      className="file-action-icon-btn" 
-                      onClick={() => alert("Searching modules database...")}
-                      title="Search modules"
-                    >
-                      <Search size={16} />
-                    </button>
+                  <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center' }}>
+                    {selectedDetailModuleId ? (
+                      <button 
+                        className="file-action-icon-btn" 
+                        onClick={() => setSelectedDetailModuleId(null)}
+                        title="Back to List"
+                        style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', marginRight: '6px' }}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                    ) : null}
+                    <span className="sidebar-title">
+                      {selectedDetailModuleId ? 'About Module' : 'Modules'}
+                    </span>
+                    {!selectedDetailModuleId && (
+                      <button 
+                        className="file-action-icon-btn" 
+                        onClick={() => alert("Searching modules database...")}
+                        title="Search modules"
+                      >
+                        <Search size={16} />
+                      </button>
+                    )}
                   </div>
                   
                   <div className="sidebar-content">
-                    <div className="modules-panel">
-                      
-                      {/* Search Bar Container */}
-                      <div className="search-input-wrapper" style={{ position: 'relative' }}>
-                        <input 
-                          type="text" 
-                          placeholder="Search modules..." 
-                          value={moduleSearchQuery}
-                          onChange={(e) => setModuleSearchQuery(e.target.value)}
-                          className="search-input"
-                          style={{ paddingRight: '56px' }}
-                        />
-                        <div style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: '4px', alignItems: 'center' }}>
-                          <button 
-                            className="file-action-icon-btn" 
-                            style={{ padding: '2px', color: 'var(--text-muted)' }}
-                            onClick={() => alert("Filter applied: All modules")}
-                            title="Filter Modules"
-                          >
-                            <Filter size={13} />
-                          </button>
-                          <button 
-                            className="file-action-icon-btn" 
-                            style={{ padding: '2px', color: 'var(--text-muted)' }}
-                            onClick={() => setModuleSearchQuery('')}
-                            title="Clear Filter"
-                          >
-                            <X size={13} />
-                          </button>
-                        </div>
-                      </div>
+                    {selectedDetailModuleId ? (() => {
+                      const mod = AVAILABLE_MODULES.find(m => m.id === selectedDetailModuleId);
+                      if (!mod) return <div style={{ padding: 'var(--spacing-md)' }}>Module not found.</div>;
+                      const isInstalled = installedModules.includes(mod.id);
 
-                      {/* Accordions */}
-                      <div className="modules-list" style={{ marginTop: 'var(--spacing-sm)' }}>
-                        
-                        {/* 1. INSTALLED ACCORDION */}
-                        <div>
-                          <div 
-                            className="module-accordion-header"
-                            onClick={() => setInstalledExpanded(!installedExpanded)}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              padding: '8px 4px',
-                              cursor: 'pointer',
-                              borderBottom: '1px solid var(--border-color)',
-                              marginBottom: '6px'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                              {installedExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              <span>INSTALLED</span>
-                            </div>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                              {installedModules.length}
-                            </span>
+                      return (
+                        <div style={{ padding: 'var(--spacing-md)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+                          <div>
+                            <h2 style={{ fontSize: '1.1rem', color: 'var(--text-primary)', fontWeight: 700, marginBottom: '2px' }}>{mod.name}</h2>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block' }}>Version: {mod.version}</span>
                           </div>
 
-                          {installedExpanded && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
-                              {AVAILABLE_MODULES.filter(mod => installedModules.includes(mod.id) && mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).map(mod => (
-                                <div key={mod.id} className="module-card">
-                                  <div className="module-card-header">
-                                    <span className="module-name">{mod.name}</span>
-                                    <span className="module-badge installed">Active</span>
-                                  </div>
-                                  <p className="module-desc">{mod.description}</p>
-                                  <button 
-                                    className="action-btn secondary"
-                                    style={{ padding: '4px 8px', fontSize: '0.75rem', width: '100%' }}
-                                    onClick={() => setInstalledModules(prev => prev.filter(id => id !== mod.id))}
+                          <div style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                            {mod.description}
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Integration Package URL</span>
+                            <code style={{ fontSize: '0.68rem', wordBreak: 'break-all', padding: '6px', background: '#0b0c10', borderRadius: '4px', border: '1px solid var(--border-color)', color: 'var(--accent-secondary)' }}>
+                              {mod.cdnUrl}
+                            </code>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Usage Guidelines</span>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                              {mod.id === 'tailwind' && "No JavaScript calls needed. Simply apply Tailwind CSS helper utility classes (like class=\"flex text-red-500\") directly on your project HTML markup tags."}
+                              {mod.id === 'fontawesome' && "Insert FontAwesome icon code tags (like <i class=\"fa fa-home\"></i> or <span class=\"fa fa-search\"></span>) directly into your HTML content."}
+                              {mod.id === 'animatecss' && "Apply Animate.css trigger styles (like class=\"animate__animated animate__bounce\") directly inside your markup elements."}
+                              {mod.id !== 'tailwind' && mod.id !== 'fontawesome' && mod.id !== 'animatecss' && `This library exports its API object globally. You can execute code referencing standard object "${mod.id === 'confetti' ? 'confetti' : mod.id === 'lodash' ? '_' : mod.id === 'jquery' ? '$' : mod.id === 'threejs' ? 'Three' : mod.id}" inside your script files.`}
+                            </div>
+                          </div>
+
+                          <button 
+                            className={`action-btn ${isInstalled ? 'secondary' : 'primary'}`}
+                            style={{ 
+                              width: '100%', 
+                              padding: '10px', 
+                              fontSize: '0.8rem', 
+                              fontWeight: 600,
+                              borderColor: isInstalled ? 'var(--accent-error)' : 'var(--accent-primary)',
+                              color: isInstalled ? 'var(--accent-error)' : 'white',
+                              marginTop: 'var(--spacing-md)' 
+                            }}
+                            onClick={() => {
+                              if (isInstalled) {
+                                setInstalledModules(prev => prev.filter(id => id !== mod.id));
+                              } else {
+                                setInstalledModules(prev => [...prev, mod.id]);
+                              }
+                            }}
+                          >
+                            {isInstalled ? 'Uninstall Package' : 'Install Package'}
+                          </button>
+
+                          <button 
+                            className="action-btn secondary"
+                            style={{ width: '100%', padding: '8px', fontSize: '0.75rem' }}
+                            onClick={() => setSelectedDetailModuleId(null)}
+                          >
+                            ← Back to Database
+                          </button>
+                        </div>
+                      );
+                    })() : (
+                      <div className="modules-panel" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+                        {/* Warning Info Box */}
+                        <div style={{ padding: '8px 10px', background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.15)', borderRadius: 'var(--radius-md)', fontSize: '0.72rem', color: 'var(--accent-warning)', display: 'flex', flexDirection: 'column', gap: '2px', marginBottom: '4px' }}>
+                          <span style={{ fontWeight: 600 }}>📡 Online Fetch Configuration</span>
+                          <span>Installing or loading these extension modules requires an active internet connection on your device to load scripts from CDNs.</span>
+                        </div>
+
+                        {/* Search Bar Container */}
+                        <div className="search-input-wrapper" style={{ position: 'relative' }}>
+                          <input 
+                            type="text" 
+                            placeholder="Search modules..." 
+                            value={moduleSearchQuery}
+                            onChange={(e) => setModuleSearchQuery(e.target.value)}
+                            className="search-input"
+                            style={{ paddingRight: '56px', width: '100%' }}
+                          />
+                          <div style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <button 
+                              className="file-action-icon-btn" 
+                              style={{ padding: '2px', color: 'var(--text-muted)' }}
+                              onClick={() => alert("Filter applied: All modules")}
+                              title="Filter Modules"
+                            >
+                              <Filter size={13} />
+                            </button>
+                            <button 
+                              className="file-action-icon-btn" 
+                              style={{ padding: '2px', color: 'var(--text-muted)' }}
+                              onClick={() => setModuleSearchQuery('')}
+                              title="Clear Filter"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Accordions */}
+                        <div className="modules-list" style={{ marginTop: 'var(--spacing-sm)' }}>
+                          
+                          {/* 1. INSTALLED ACCORDION */}
+                          <div>
+                            <div 
+                              className="module-accordion-header"
+                              onClick={() => setInstalledExpanded(!installedExpanded)}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '8px 4px',
+                                cursor: 'pointer',
+                                borderBottom: '1px solid var(--border-color)',
+                                marginBottom: '6px'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {installedExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                <span>INSTALLED</span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                {installedModules.length}
+                              </span>
+                            </div>
+
+                            {installedExpanded && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                                {AVAILABLE_MODULES.filter(mod => installedModules.includes(mod.id) && mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).map(mod => (
+                                  <div 
+                                    key={mod.id} 
+                                    className="module-card" 
+                                    onClick={() => setSelectedDetailModuleId(mod.id)}
+                                    style={{ cursor: 'pointer' }}
                                   >
-                                    Uninstall
-                                  </button>
-                                </div>
-                              ))}
-                              {installedModules.filter(id => AVAILABLE_MODULES.find(m => m.id === id)?.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).length === 0 && (
-                                <div className="console-empty" style={{ fontSize: '0.75rem', padding: '6px 0' }}>No matching installed modules.</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* 2. POPULAR ACCORDION (no extension comes should be shown) */}
-                        <div>
-                          <div 
-                            className="module-accordion-header"
-                            onClick={() => setPopularExpanded(!popularExpanded)}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              padding: '8px 4px',
-                              cursor: 'pointer',
-                              borderBottom: '1px solid var(--border-color)',
-                              marginBottom: '6px'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                              {popularExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              <span>POPULAR</span>
-                            </div>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>0</span>
-                          </div>
-
-                          {popularExpanded && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
-                              <div className="console-empty" style={{ fontSize: '0.75rem', padding: '6px 0' }}>No popular modules available.</div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* 3. RECOMMENDED ACCORDION (suggest 10 only) */}
-                        <div>
-                          <div 
-                            className="module-accordion-header"
-                            onClick={() => setRecommendedExpanded(!recommendedExpanded)}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              padding: '8px 4px',
-                              cursor: 'pointer',
-                              borderBottom: '1px solid var(--border-color)',
-                              marginBottom: '6px'
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                              {recommendedExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              <span>RECOMMENDED</span>
-                            </div>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                              {AVAILABLE_MODULES.filter(mod => mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).length}
-                            </span>
-                          </div>
-
-                          {recommendedExpanded && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                              {AVAILABLE_MODULES.filter(mod => mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).map(mod => {
-                                const isInstalled = installedModules.includes(mod.id);
-                                return (
-                                  <div key={mod.id} className="module-card">
                                     <div className="module-card-header">
                                       <span className="module-name">{mod.name}</span>
-                                      <span className={`module-badge ${isInstalled ? 'installed' : 'uninstalled'}`}>
-                                        {isInstalled ? 'Active' : 'Add'}
-                                      </span>
+                                      <span className="module-badge installed">Active</span>
                                     </div>
                                     <p className="module-desc">{mod.description}</p>
-                                    <button 
-                                      className={`action-btn ${isInstalled ? 'secondary' : 'primary'}`}
-                                      style={{ padding: '4px 8px', fontSize: '0.75rem', width: '100%' }}
-                                      onClick={() => {
-                                        if (isInstalled) {
-                                          setInstalledModules(prev => prev.filter(id => id !== mod.id));
-                                        } else {
-                                          setInstalledModules(prev => [...prev, mod.id]);
-                                        }
-                                      }}
-                                    >
-                                      {isInstalled ? 'Uninstall' : 'Install Module'}
-                                    </button>
                                   </div>
-                                );
-                              })}
-                              {AVAILABLE_MODULES.filter(mod => mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).length === 0 && (
-                                <div className="console-empty" style={{ fontSize: '0.75rem', padding: '6px 0' }}>No modules found matching query.</div>
-                              )}
+                                ))}
+                                {installedModules.filter(id => AVAILABLE_MODULES.find(m => m.id === id)?.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).length === 0 && (
+                                  <div className="console-empty" style={{ fontSize: '0.75rem', padding: '6px 0' }}>No matching installed modules.</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 2. POPULAR ACCORDION */}
+                          <div>
+                            <div 
+                              className="module-accordion-header"
+                              onClick={() => setPopularExpanded(!popularExpanded)}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '8px 4px',
+                                cursor: 'pointer',
+                                borderBottom: '1px solid var(--border-color)',
+                                marginBottom: '6px'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {popularExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                <span>POPULAR</span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>0</span>
                             </div>
-                          )}
+
+                            {popularExpanded && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                                <div className="console-empty" style={{ fontSize: '0.75rem', padding: '6px 0' }}>No popular modules available.</div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. RECOMMENDED ACCORDION */}
+                          <div>
+                            <div 
+                              className="module-accordion-header"
+                              onClick={() => setRecommendedExpanded(!recommendedExpanded)}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '8px 4px',
+                                cursor: 'pointer',
+                                borderBottom: '1px solid var(--border-color)',
+                                marginBottom: '6px'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {recommendedExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                <span>RECOMMENDED</span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                {AVAILABLE_MODULES.filter(mod => mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).length}
+                              </span>
+                            </div>
+
+                            {recommendedExpanded && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {AVAILABLE_MODULES.filter(mod => mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).map(mod => {
+                                  const isInstalled = installedModules.includes(mod.id);
+                                  return (
+                                    <div 
+                                      key={mod.id} 
+                                      className="module-card"
+                                      onClick={() => setSelectedDetailModuleId(mod.id)}
+                                      style={{ cursor: 'pointer' }}
+                                    >
+                                      <div className="module-card-header">
+                                        <span className="module-name">{mod.name}</span>
+                                        <span className={`module-badge ${isInstalled ? 'installed' : 'uninstalled'}`}>
+                                          {isInstalled ? 'Active' : 'Add'}
+                                        </span>
+                                      </div>
+                                      <p className="module-desc">{mod.description}</p>
+                                    </div>
+                                  );
+                                })}
+                                {AVAILABLE_MODULES.filter(mod => mod.name.toLowerCase().includes(moduleSearchQuery.toLowerCase())).length === 0 && (
+                                  <div className="console-empty" style={{ fontSize: '0.75rem', padding: '6px 0' }}>No modules found matching query.</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
                         </div>
-
                       </div>
-
-                    </div>
+                    )}
                   </div>
                 </>
               )}
@@ -2735,25 +2999,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteModal && (
-        <div className="modal-overlay" onClick={() => setShowDeleteModal(false)}>
-          <div className="modal-content animate-fade" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal-title">Delete File</h3>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: 'var(--spacing-md)' }}>
-              Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>{deleteTargetName}</strong>? This action cannot be undone.
-            </p>
-            <div className="modal-actions">
-              <button className="action-btn secondary" onClick={() => setShowDeleteModal(false)}>
-                Cancel
-              </button>
-              <button className="action-btn primary" style={{ backgroundColor: 'var(--accent-error)', borderColor: 'var(--accent-error)' }} onClick={handleDeleteConfirm}>
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {/* Git Clone Modal */}
       {showGitModal && (
