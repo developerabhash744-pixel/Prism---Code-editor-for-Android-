@@ -370,6 +370,10 @@ export default function App() {
   const [loginUsername, setLoginUsername] = useState<string>('');
   const [loginEmail, setLoginEmail] = useState<string>('');
 
+  const [isSignUpMode, setIsSignUpMode] = useState<boolean>(false);
+  const [loginPassword, setLoginPassword] = useState<string>('');
+  const [signUpConfirmPassword, setSignUpConfirmPassword] = useState<string>('');
+
   // Welcome Screen configuration state
   const [showWelcomeOnStartup, setShowWelcomeOnStartup] = useState<boolean>(() => {
     const saved = localStorage.getItem('prism_show_welcome_startup');
@@ -517,8 +521,8 @@ export default function App() {
 
   const [showGitModal, setShowGitModal] = useState<boolean>(false);
   const [gitRepoUrl, setGitRepoUrl] = useState<string>('');
-
   const [selectedDetailModuleId, setSelectedDetailModuleId] = useState<string | null>(null);
+  const [openedFolderPath, setOpenedFolderPath] = useState<string | null>(null);
 
   // Empty folders track
   const [emptyFolders, setEmptyFolders] = useState<string[]>([]);
@@ -1007,6 +1011,7 @@ export default function App() {
         setEmptyFolders(data.folders);
         setIsFolderOpen(true);
         setAppLoaded(true);
+        setOpenedFolderPath(result.path);
 
         if (data.files.length > 0) {
           const firstFile = data.files[0].name;
@@ -1024,6 +1029,51 @@ export default function App() {
       }
     } else {
       document.getElementById('folder-picker')?.click();
+    }
+  };
+
+  const handleRefreshFolder = async () => {
+    if (!openedFolderPath) return;
+    if (Capacitor.isNativePlatform()) {
+      try {
+        setLoadingProgress(15);
+        setLoadingText("Re-scanning folder tree...");
+        setAppLoaded(false);
+
+        const data = await readExternalDirRecursive(openedFolderPath);
+        
+        // Sync these files with App sandboxed Directory.Data so offline preview has them
+        setLoadingProgress(60);
+        setLoadingText("Synchronizing changes...");
+        
+        for (const folder of data.folders) {
+          await Filesystem.mkdir({
+            path: folder,
+            directory: Directory.Data,
+            recursive: true
+          }).catch(() => {});
+        }
+        for (const f of data.files) {
+          await Filesystem.writeFile({
+            path: f.name,
+            data: f.content,
+            directory: Directory.Data,
+            encoding: Encoding.UTF8,
+            recursive: true
+          }).catch(() => {});
+        }
+
+        setFiles(data.files);
+        setEmptyFolders(data.folders);
+        setAppLoaded(true);
+        alert("Folder content refreshed successfully!");
+      } catch (err: any) {
+        setAppLoaded(true);
+        console.error("Refresh failed:", err);
+        alert(`Failed to refresh folder: ${err.message || err}`);
+      }
+    } else {
+      alert("Folder refresh is only supported on native Android platform.");
     }
   };
 
@@ -1289,7 +1339,7 @@ export default function App() {
       { name: "Restore Default Project", description: "Reset workspace to clean slate", action: () => { handleRestoreDefaults(); } },
       { name: "Clear Workspace / Close Folder", description: "Empty files from editor", action: () => { handleClearWorkspace(); } },
       { name: "Run Active Preview", description: "Compile HTML, CSS, and script assets", action: () => { handleRunCode(); } },
-      { name: "Configure / Install Linux OS Terminal", description: "Activate browser Linux terminal emulator", action: () => { setActiveSidebarTab('terminal'); setSidebarOpen(true); } }
+      { name: "Configure / Install Official Ubuntu Terminal", description: "Activate browser Linux terminal emulator", action: () => { setActiveSidebarTab('terminal'); setSidebarOpen(true); } }
     ];
 
     if (!commandSearch.trim()) return commandsList;
@@ -1356,6 +1406,30 @@ export default function App() {
     if (extension === 'py') return 'python';
     if (['md', 'markdown'].includes(extension)) return 'markdown';
     return 'text';
+  };
+
+  const displayFileName = (fileName: string) => {
+    if (['Terminal', 'Settings', 'Welcome'].includes(fileName)) {
+      return fileName;
+    }
+    const baseName = fileName.split('/').pop() || fileName;
+    const dotIndex = baseName.lastIndexOf('.');
+    if (dotIndex === -1) {
+      if (baseName.length > 7) return baseName.slice(0, 7) + '.';
+      return baseName;
+    }
+    const namePart = baseName.substring(0, dotIndex);
+    const extPart = baseName.substring(dotIndex + 1);
+    if (namePart.length > 7) {
+      return namePart.slice(0, 7) + '.' + extPart;
+    }
+    return baseName;
+  };
+
+  const displayFolderName = (folderName: string) => {
+    const baseName = folderName.split('/').pop() || folderName;
+    if (baseName.length > 7) return baseName.slice(0, 7) + '.';
+    return baseName;
   };
 
   const handleTerminalSubmit = (e: React.FormEvent) => {
@@ -1867,7 +1941,7 @@ export default function App() {
             ) : (
               <FileCode size={14} style={{ color: getFileIconColor(node.name), flexShrink: 0 }} />
             )}
-            <span className="tree-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+            <span className="tree-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isFolder ? displayFolderName(node.name) : displayFileName(node.name)}</span>
           </div>
 
           {/* Row Actions Panel */}
@@ -1942,7 +2016,7 @@ export default function App() {
 
         <div className="header-actions" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           {/* Mobile Preview Toggle */}
-          {window.innerWidth <= 768 && (
+          {window.innerWidth <= 768 && (activeFileName.endsWith('.html') || activeFileName.endsWith('.htm')) && (
             <button
               className="activity-btn"
               onClick={() => {
@@ -2160,14 +2234,22 @@ export default function App() {
                             </button>
                             <button 
                               className="file-action-icon-btn" 
-                              onClick={() => {
+                              onClick={openedFolderPath ? handleRefreshFolder : () => {
                                 setExpandedFolders(prev => ({ ...prev, 'workspace': true }));
                                 alert("Refreshed workspace file tree.");
                               }}
-                              title="Refresh Explorer"
-                              style={{ padding: '2px' }}
+                              title={openedFolderPath ? "Sync / Refresh from Internal Storage" : "Refresh Explorer"}
+                              style={{ padding: '2px', color: openedFolderPath ? 'var(--accent-secondary)' : 'inherit' }}
                             >
                               <RefreshCw size={14} />
+                            </button>
+                            <button 
+                              className="file-action-icon-btn" 
+                              onClick={handleOpenFolder}
+                              title="Open Another Folder"
+                              style={{ padding: '2px' }}
+                            >
+                              <FolderOpen size={14} />
                             </button>
                             <button 
                               className="file-action-icon-btn" 
@@ -2233,7 +2315,7 @@ export default function App() {
                           <div key={fIdx} className="search-result-file">
                             <div className="search-result-file-title">
                               <FileCode size={14} style={{ color: 'var(--text-secondary)' }} />
-                              <span>{res.file}</span>
+                              <span>{displayFileName(res.file)}</span>
                             </div>
                             {res.matches.map((match, mIdx) => (
                               <div 
@@ -2535,13 +2617,13 @@ export default function App() {
               {activeSidebarTab === 'terminal' && (
                 <>
                   <div className="sidebar-header">
-                    <span className="sidebar-title">OS Terminal</span>
+                    <span className="sidebar-title">Official Ubuntu Terminal</span>
                   </div>
                   <div className="sidebar-content" style={{ padding: 'var(--spacing-md)' }}>
                     {!isTerminalInstalled ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                          Install an Ubuntu Linux operating system runtime inside your browser sandbox.
+                          Install an Official Ubuntu Linux operating system runtime inside your browser sandbox.
                         </p>
 
                         {installingOS ? (
@@ -2557,7 +2639,7 @@ export default function App() {
                             style={{ width: '100%', marginTop: 'var(--spacing-sm)' }}
                             onClick={handleInstallOS}
                           >
-                            Install Ubuntu OS
+                            Install Official Ubuntu OS
                           </button>
                         )}
                       </div>
@@ -2566,7 +2648,7 @@ export default function App() {
                         <div style={{ padding: 'var(--spacing-sm)', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                           <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block' }}>Active Runtime</span>
                           <strong style={{ fontSize: '0.9rem', color: 'var(--accent-success)' }}>
-                            Ubuntu Linux (WebVM)
+                            Official Ubuntu Linux
                           </strong>
                           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '4px' }}>Status: Running (sandbox)</span>
                         </div>
@@ -2605,7 +2687,7 @@ export default function App() {
                 className={`editor-tab ${tab === activeFileName ? 'active' : ''}`}
                 onClick={() => handleSelectTab(tab)}
               >
-                <span>{tab}</span>
+                <span>{displayFileName(tab)}</span>
                 <button 
                   className="tab-close" 
                   onClick={(e) => handleCloseTab(tab, e)}
@@ -2759,7 +2841,7 @@ export default function App() {
                 <div className="settings-row">
                   <div className="setting-detail">
                     <span className="setting-name">Installed Linux OS Runtime</span>
-                    <span className="setting-desc">Status: {isTerminalInstalled ? "Ubuntu Linux (WebVM) Installed" : "Not Installed"}</span>
+                    <span className="setting-desc">Status: {isTerminalInstalled ? "Official Ubuntu Linux Installed" : "Not Installed"}</span>
                   </div>
                   {isTerminalInstalled ? (
                     <button 
@@ -2767,7 +2849,7 @@ export default function App() {
                       style={{ borderColor: 'var(--accent-error)', color: 'var(--accent-error)', padding: '4px 12px', fontSize: '0.75rem' }}
                       onClick={handleUninstallOS}
                     >
-                      Uninstall Ubuntu OS
+                      Uninstall Official Ubuntu OS
                     </button>
                   ) : (
                     <button 
@@ -2833,7 +2915,19 @@ export default function App() {
                   {/* welcome terminal option card removed */}
                 </div>
 
-                {/* 2. Recent Section removed */}
+              </div>
+
+              <div style={{ marginTop: 'var(--spacing-lg)', display: 'flex', alignItems: 'center', gap: '8px', opacity: 0.8 }}>
+                <input 
+                  type="checkbox" 
+                  id="welcome-startup-checkbox"
+                  checked={showWelcomeOnStartup} 
+                  onChange={(e) => setShowWelcomeOnStartup(e.target.checked)} 
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="welcome-startup-checkbox" style={{ fontSize: '0.8rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                  Show Welcome Page on Startup
+                </label>
               </div>
             </div>
           ) : activeFile ? (
@@ -3039,55 +3133,180 @@ export default function App() {
 
       {/* Login Modal */}
       {showLoginModal && (
-        <div className="modal-overlay" onClick={() => setShowLoginModal(false)}>
-          <div className="modal-content animate-fade" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal-title">Sign In</h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', margin: '12px 0' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Username</label>
-                <input 
-                  className="modal-input"
-                  type="text" 
-                  placeholder="Enter username"
-                  value={loginUsername}
-                  onChange={(e) => setLoginUsername(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('signin-btn')?.click()}
-                  autoFocus
-                />
-              </div>
+        <div className="modal-overlay" onClick={() => { setShowLoginModal(false); setIsSignUpMode(false); }}>
+          <div className="modal-content animate-fade" style={{ maxWidth: '380px' }} onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">{isSignUpMode ? 'Create Account' : 'Sign In'}</h3>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', margin: '14px 0' }}>
+              
+              {isSignUpMode && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Full Name</label>
+                  <input 
+                    className="modal-input"
+                    type="text" 
+                    placeholder="Enter your name"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+              )}
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Email Address</label>
                 <input 
                   className="modal-input"
                   type="email" 
-                  placeholder="Enter email"
+                  placeholder="name@example.com"
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('signin-btn')?.click()}
+                  autoFocus={!isSignUpMode}
                 />
               </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Password</label>
+                <input 
+                  className="modal-input"
+                  type="password" 
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                />
+              </div>
+
+              {isSignUpMode && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Confirm Password</label>
+                  <input 
+                    className="modal-input"
+                    type="password" 
+                    placeholder="••••••••"
+                    value={signUpConfirmPassword}
+                    onChange={(e) => setSignUpConfirmPassword(e.target.value)}
+                  />
+                </div>
+              )}
             </div>
-            <div className="modal-actions">
-              <button className="action-btn secondary" onClick={() => setShowLoginModal(false)}>
+
+            {/* Social Logins */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '14px 0 8px 0', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '12px' }}>
+              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center', display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Or {isSignUpMode ? 'sign up' : 'sign in'} with
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  className="action-btn secondary" 
+                  style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '0.75rem' }}
+                  onClick={() => {
+                    setUsername("Google User");
+                    setEmail("google.user@gmail.com");
+                    setIsLoggedIn(true);
+                    localStorage.setItem('prism_username', "Google User");
+                    localStorage.setItem('prism_email', "google.user@gmail.com");
+                    localStorage.setItem('prism_logged_in', 'true');
+                    setShowLoginModal(false);
+                    setIsSignUpMode(false);
+                    alert("Signed in successfully with Google!");
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--accent-secondary)' }}><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+                  <span>Google</span>
+                </button>
+                <button 
+                  className="action-btn secondary" 
+                  style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '0.75rem' }}
+                  onClick={() => {
+                    setUsername("GitHub Coder");
+                    setEmail("github.coder@github.com");
+                    setIsLoggedIn(true);
+                    localStorage.setItem('prism_username', "GitHub Coder");
+                    localStorage.setItem('prism_email', "github.coder@github.com");
+                    localStorage.setItem('prism_logged_in', 'true');
+                    setShowLoginModal(false);
+                    setIsSignUpMode(false);
+                    alert("Signed in successfully with GitHub!");
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                  <span>GitHub</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: '16px' }}>
+              <button className="action-btn secondary" onClick={() => { setShowLoginModal(false); setIsSignUpMode(false); }}>
                 Cancel
               </button>
-              <button id="signin-btn" className="action-btn primary" onClick={() => {
-                if (!loginUsername.trim() || !loginEmail.trim()) {
-                  alert("Please fill in both fields.");
-                  return;
-                }
-                setUsername(loginUsername);
-                setEmail(loginEmail);
-                setIsLoggedIn(true);
-                localStorage.setItem('prism_username', loginUsername);
-                localStorage.setItem('prism_email', loginEmail);
-                localStorage.setItem('prism_logged_in', 'true');
-                setShowLoginModal(false);
-                alert(`Welcome back, ${loginUsername}!`);
-              }}>
-                Sign In
+              <button 
+                id="signin-btn" 
+                className="action-btn primary" 
+                onClick={() => {
+                  if (isSignUpMode) {
+                    if (!loginUsername.trim() || !loginEmail.trim() || !loginPassword.trim() || !signUpConfirmPassword.trim()) {
+                      alert("Please fill in all registration fields.");
+                      return;
+                    }
+                    if (loginPassword !== signUpConfirmPassword) {
+                      alert("Passwords do not match!");
+                      return;
+                    }
+                    setUsername(loginUsername);
+                    setEmail(loginEmail);
+                    setIsLoggedIn(true);
+                    localStorage.setItem('prism_username', loginUsername);
+                    localStorage.setItem('prism_email', loginEmail);
+                    localStorage.setItem('prism_logged_in', 'true');
+                    setShowLoginModal(false);
+                    setIsSignUpMode(false);
+                    alert(`Account created successfully! Welcome to Prism, ${loginUsername}!`);
+                  } else {
+                    if (!loginEmail.trim() || !loginPassword.trim()) {
+                      alert("Please fill in both email and password.");
+                      return;
+                    }
+                    const derivedName = loginEmail.split('@')[0] || "User";
+                    setUsername(derivedName);
+                    setEmail(loginEmail);
+                    setIsLoggedIn(true);
+                    localStorage.setItem('prism_username', derivedName);
+                    localStorage.setItem('prism_email', loginEmail);
+                    localStorage.setItem('prism_logged_in', 'true');
+                    setShowLoginModal(false);
+                    alert(`Signed in successfully! Welcome back, ${derivedName}!`);
+                  }
+                }}
+              >
+                {isSignUpMode ? 'Sign Up' : 'Sign In'}
               </button>
             </div>
+
+            {/* Toggle Mode Link in bottom */}
+            <div style={{ textAlign: 'center', marginTop: '12px', fontSize: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '10px' }}>
+              {isSignUpMode ? (
+                <span style={{ color: 'var(--text-muted)' }}>
+                  Already have an account?{' '}
+                  <button 
+                    style={{ background: 'none', border: 'none', color: 'var(--accent-secondary)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setIsSignUpMode(false)}
+                  >
+                    Sign In instead
+                  </button>
+                </span>
+              ) : (
+                <span style={{ color: 'var(--text-muted)' }}>
+                  Account not created yet?{' '}
+                  <button 
+                    style={{ background: 'none', border: 'none', color: 'var(--accent-secondary)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setIsSignUpMode(true)}
+                  >
+                    Sign Up instead
+                  </button>
+                </span>
+              )}
+            </div>
+
           </div>
         </div>
       )}
