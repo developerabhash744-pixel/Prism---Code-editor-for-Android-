@@ -430,9 +430,8 @@ export default function App() {
   ]);
   const [terminalInput, setTerminalInput] = useState<string>('');
   const [terminalPath, setTerminalPath] = useState<string>('~');
-
-  const [terminalOS, setTerminalOS] = useState<string>(() => {
-    return localStorage.getItem('prism_terminal_os') || 'alpine';
+  const [terminalOS] = useState<string>(() => {
+    return localStorage.getItem('prism_terminal_os') || 'ubuntu';
   });
   const [installingOS, setInstallingOS] = useState<boolean>(false);
   const [installProgress, setInstallProgress] = useState<number>(0);
@@ -2278,55 +2277,8 @@ export default function App() {
                     {!isTerminalInstalled ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
                         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                          Install a native-style Linux operating system runtime inside your browser sandbox.
+                          Install an Ubuntu Linux operating system runtime inside your browser sandbox.
                         </p>
-                        
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                            <input 
-                              type="radio" 
-                              name="terminal-os-select" 
-                              value="alpine" 
-                              checked={terminalOS === 'alpine'}
-                              onChange={() => setTerminalOS('alpine')}
-                              disabled={installingOS}
-                            />
-                            <span>Alpine Linux (RISC-V)</span>
-                          </label>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '20px', display: 'block', marginTop: '-4px' }}>
-                            Lightweight RISC-V environment (JSLinux). Boot up under 3 seconds.
-                          </span>
-
-                          <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '4px' }}>
-                            <input 
-                              type="radio" 
-                              name="terminal-os-select" 
-                              value="debian" 
-                              checked={terminalOS === 'debian'}
-                              onChange={() => setTerminalOS('debian')}
-                              disabled={installingOS}
-                            />
-                            <span>Debian Linux (WebVM)</span>
-                          </label>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '20px', display: 'block', marginTop: '-4px' }}>
-                            CheerpX virtual machine. Supports full package management (apt install).
-                          </span>
-
-                          <label style={{ fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '4px' }}>
-                            <input 
-                              type="radio" 
-                              name="terminal-os-select" 
-                              value="v86" 
-                              checked={terminalOS === 'v86'}
-                              onChange={() => setTerminalOS('v86')}
-                              disabled={installingOS}
-                            />
-                            <span>Alpine Linux (x86 v86)</span>
-                          </label>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '20px', display: 'block', marginTop: '-4px' }}>
-                            x86-emulated Alpine environment. Includes basic shell tools.
-                          </span>
-                        </div>
 
                         {installingOS ? (
                           <div style={{ marginTop: 'var(--spacing-md)' }}>
@@ -2341,7 +2293,7 @@ export default function App() {
                             style={{ width: '100%', marginTop: 'var(--spacing-sm)' }}
                             onClick={handleInstallOS}
                           >
-                            Install Linux OS
+                            Install Ubuntu OS
                           </button>
                         )}
                       </div>
@@ -2350,7 +2302,7 @@ export default function App() {
                         <div style={{ padding: 'var(--spacing-sm)', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                           <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block' }}>Active Runtime</span>
                           <strong style={{ fontSize: '0.9rem', color: 'var(--accent-success)' }}>
-                            {terminalOS === 'alpine' ? 'Alpine Linux (RISC-V)' : terminalOS === 'debian' ? 'Debian Linux (WebVM)' : 'Alpine Linux (x86 v86)'}
+                            Ubuntu Linux (WebVM)
                           </strong>
                           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginTop: '4px' }}>Status: Running (sandbox)</span>
                         </div>
@@ -2366,16 +2318,6 @@ export default function App() {
                           }}
                         >
                           Open Terminal in Editor
-                        </button>
-
-
-
-                        <button 
-                          className="action-btn secondary" 
-                          style={{ width: '100%', fontSize: '0.8rem', borderColor: 'var(--accent-error)', color: 'var(--accent-error)', marginTop: 'var(--spacing-lg)' }}
-                          onClick={handleUninstallOS}
-                        >
-                          Uninstall OS / Reset Terminal
                         </button>
                       </div>
                     )}
@@ -2541,6 +2483,40 @@ export default function App() {
                     <span className="setting-desc">System browser metadata.</span>
                   </div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Chrome/Webkit Sandbox</span>
+                </div>
+              </div>
+
+              <div className="settings-group-card">
+                <h3 className="settings-group-title">
+                  <Terminal size={18} />
+                  <span>Terminal OS Configuration</span>
+                </h3>
+
+                <div className="settings-row">
+                  <div className="setting-detail">
+                    <span className="setting-name">Installed Linux OS Runtime</span>
+                    <span className="setting-desc">Status: {isTerminalInstalled ? "Ubuntu Linux (WebVM) Installed" : "Not Installed"}</span>
+                  </div>
+                  {isTerminalInstalled ? (
+                    <button 
+                      className="action-btn secondary" 
+                      style={{ borderColor: 'var(--accent-error)', color: 'var(--accent-error)', padding: '4px 12px', fontSize: '0.75rem' }}
+                      onClick={handleUninstallOS}
+                    >
+                      Uninstall Ubuntu OS
+                    </button>
+                  ) : (
+                    <button 
+                      className="action-btn primary" 
+                      style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                      onClick={() => {
+                        setActiveSidebarTab('terminal');
+                        setSidebarOpen(true);
+                      }}
+                    >
+                      Install OS...
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
