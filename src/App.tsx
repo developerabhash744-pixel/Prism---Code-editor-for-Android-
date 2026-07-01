@@ -26,16 +26,12 @@ import { markdown } from '@codemirror/lang-markdown';
 import {
   Plus,
   Trash2,
-  Play,
   Settings,
   Terminal,
   Eye,
   RefreshCw,
   X,
   Code2,
-  Info,
-  AlertTriangle,
-  XCircle,
   FileCode,
   Sparkles,
   Search,
@@ -150,11 +146,7 @@ function buildFileTree(files: VirtualFile[], emptyFolders: string[] = []): TreeN
   return root;
 }
 
-interface ConsoleLog {
-  level: 'log' | 'warn' | 'error';
-  text: string;
-  timestamp: Date;
-}
+// ConsoleLog interface removed
 
 // Initial File System
 const DEFAULT_FILES: VirtualFile[] = [
@@ -360,9 +352,39 @@ export default function App() {
   // --- STATE ---
   const [files, setFiles] = useState<VirtualFile[]>([]);
   
-  const [activeFileName, setActiveFileName] = useState<string>('Welcome');
+  // User Login & Profile states
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem('prism_logged_in') === 'true';
+  });
+  const [username, setUsername] = useState<string>(() => {
+    return localStorage.getItem('prism_username') || '';
+  });
+  const [email, setEmail] = useState<string>(() => {
+    return localStorage.getItem('prism_email') || '';
+  });
 
-  const [openTabs, setOpenTabs] = useState<string[]>(['Welcome']);
+  const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
+  const [showProfileSettingsModal, setShowProfileSettingsModal] = useState<boolean>(false);
+  const [loginUsername, setLoginUsername] = useState<string>('');
+  const [loginEmail, setLoginEmail] = useState<string>('');
+
+  // Welcome Screen configuration state
+  const [showWelcomeOnStartup, setShowWelcomeOnStartup] = useState<boolean>(() => {
+    const saved = localStorage.getItem('prism_show_welcome_startup');
+    return saved === null ? true : saved === 'true';
+  });
+
+  const [activeFileName, setActiveFileName] = useState<string>(() => {
+    const savedShow = localStorage.getItem('prism_show_welcome_startup');
+    const show = savedShow === null ? true : savedShow === 'true';
+    return show ? 'Welcome' : '';
+  });
+
+  const [openTabs, setOpenTabs] = useState<string[]>(() => {
+    const savedShow = localStorage.getItem('prism_show_welcome_startup');
+    const show = savedShow === null ? true : savedShow === 'true';
+    return show ? ['Welcome'] : [];
+  });
 
   // Editor Settings
   const [fontSize, setFontSize] = useState<number>(14);
@@ -372,8 +394,7 @@ export default function App() {
 
   // View States
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
-  const [mobileTab, setMobileTab] = useState<'editor' | 'preview' | 'console'>('editor');
-  const [consoleLogs, setConsoleLogs] = useState<ConsoleLog[]>([]);
+  const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('editor');
   const [previewUrl, setPreviewUrl] = useState<string>('');
 
   // Expanded folders record
@@ -401,11 +422,6 @@ export default function App() {
   const [isTerminalInstalled, setIsTerminalInstalled] = useState<boolean>(() => {
     return localStorage.getItem('prism_terminal_installed') === 'true';
   });
-  const [recentFolders, setRecentFolders] = useState<string[]>(() => {
-    return JSON.parse(localStorage.getItem('prism_recent_folders') || '[]');
-  });
-  const [activeConsoleTab, setActiveConsoleTab] = useState<'logs' | 'terminal'>('logs');
-
   const [terminalLines, setTerminalLines] = useState<string[]>([
     'Prism Terminal v1.0.0 (Internal Storage Shell)',
     'Connected to app file storage.',
@@ -413,7 +429,7 @@ export default function App() {
     ''
   ]);
   const [terminalInput, setTerminalInput] = useState<string>('');
-  const [terminalPath, setTerminalPath] = useState<string>('workspace');
+  const [terminalPath, setTerminalPath] = useState<string>('~');
 
   const [terminalOS, setTerminalOS] = useState<string>(() => {
     return localStorage.getItem('prism_terminal_os') || 'alpine';
@@ -479,6 +495,11 @@ export default function App() {
     localStorage.setItem('prism_installed_modules', JSON.stringify(installedModules));
   }, [installedModules]);
 
+  // Sync showWelcomeOnStartup to localStorage
+  useEffect(() => {
+    localStorage.setItem('prism_show_welcome_startup', String(showWelcomeOnStartup));
+  }, [showWelcomeOnStartup]);
+
   // Modals
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>('');
@@ -497,8 +518,7 @@ export default function App() {
   const [showGitModal, setShowGitModal] = useState<boolean>(false);
   const [gitRepoUrl, setGitRepoUrl] = useState<string>('');
 
-  const [showOpenFolderModal, setShowOpenFolderModal] = useState<boolean>(false);
-  const [folderToOpenName, setFolderToOpenName] = useState<string>('');
+
 
   // Empty folders track
   const [emptyFolders, setEmptyFolders] = useState<string[]>([]);
@@ -543,14 +563,9 @@ export default function App() {
     const handleConsoleMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'PRISM_CONSOLE_LOG') {
         const { level, data } = event.data;
-        setConsoleLogs(prev => [
-          ...prev,
-          {
-            level,
-            text: data,
-            timestamp: new Date()
-          }
-        ]);
+        if (level === 'error') console.error(`[Sandbox] ${data}`);
+        else if (level === 'warn') console.warn(`[Sandbox] ${data}`);
+        else console.log(`[Sandbox] ${data}`);
       }
     };
 
@@ -696,7 +711,7 @@ export default function App() {
 
   const handleSelectTab = (tabName: string) => {
     setActiveFileName(tabName);
-    if (mobileTab === 'preview' || mobileTab === 'console') {
+    if (mobileTab === 'preview') {
       setMobileTab('editor');
     }
   };
@@ -708,8 +723,6 @@ export default function App() {
       alert('Error: You need at least one HTML file (e.g. index.html) to run the preview.');
       return;
     }
-
-    setConsoleLogs([]); // Clear console
 
     // Retrieve other files
     const cssFiles = files.filter(f => f.name.endsWith('.css'));
@@ -826,36 +839,77 @@ export default function App() {
 
 
   const handleOpenFolder = () => {
-    setFolderToOpenName('PrismProject');
-    setShowOpenFolderModal(true);
+    document.getElementById('folder-picker')?.click();
   };
 
-  const handleOpenFolderConfirm = () => {
-    if (!folderToOpenName.trim()) return;
-    const folderName = folderToOpenName.trim();
-    setRecentFolders(prev => {
-      const next = [folderName, ...prev.filter(f => f !== folderName)].slice(0, 5);
-      localStorage.setItem('prism_recent_folders', JSON.stringify(next));
-      return next;
-    });
+  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = e.target.files;
+    if (!selectedFiles || selectedFiles.length === 0) return;
     
-    setIsFolderOpen(true);
-    localStorage.setItem('prism_folder_open', 'true');
+    const loadedFiles: VirtualFile[] = [];
+    const loadedFolders = new Set<string>();
 
-    // Create mock starter files for the project
-    const folderFiles = [
-      { name: `${folderName}/index.html`, content: `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8">\n  <title>${folderName}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Welcome to ${folderName}!</h1>\n  <script src="script.js"></script>\n</body>\n</html>`, language: 'html' },
-      { name: `${folderName}/style.css`, content: `body {\n  font-family: sans-serif;\n  background-color: #12131c;\n  color: white;\n  text-align: center;\n  padding-top: 100px;\n}`, language: 'css' },
-      { name: `${folderName}/script.js`, content: `console.log("Project folder ${folderName} loaded.");`, language: 'javascript' }
-    ];
+    const firstPath = selectedFiles[0].webkitRelativePath || '';
+    const rootFolderName = firstPath.split('/')[0] || 'Project';
 
-    setFiles(folderFiles);
-    setEmptyFolders([folderName]);
-    setActiveFileName(`${folderName}/index.html`);
-    setOpenTabs(['Welcome', `${folderName}/index.html`]);
+    let processedCount = 0;
+    Array.from(selectedFiles).forEach(file => {
+      const reader = new FileReader();
+      const relativePath = file.webkitRelativePath || file.name;
+      
+      const cleanPath = relativePath.startsWith(rootFolderName + '/') 
+        ? relativePath.substring(rootFolderName.length + 1)
+        : relativePath;
 
-    setFolderToOpenName('');
-    setShowOpenFolderModal(false);
+      const pathParts = cleanPath.split('/');
+      for (let i = 0; i < pathParts.length - 1; i++) {
+        loadedFolders.add(pathParts.slice(0, i + 1).join('/'));
+      }
+
+      reader.onload = async (event) => {
+        const content = event.target?.result as string || '';
+        
+        loadedFiles.push({
+          name: cleanPath,
+          content,
+          language: getLanguageFromExtension(file.name)
+        });
+
+        processedCount++;
+        if (processedCount === selectedFiles.length) {
+          if (Capacitor.isNativePlatform()) {
+            for (const folder of Array.from(loadedFolders)) {
+              await Filesystem.mkdir({
+                path: folder,
+                directory: Directory.Data,
+                recursive: true
+              }).catch(() => {});
+            }
+            for (const f of loadedFiles) {
+              await Filesystem.writeFile({
+                path: f.name,
+                data: f.content,
+                directory: Directory.Data,
+                encoding: Encoding.UTF8,
+                recursive: true
+              }).catch(() => {});
+            }
+          }
+
+          setFiles(loadedFiles);
+          setEmptyFolders(Array.from(loadedFolders));
+          setIsFolderOpen(true);
+          
+          if (loadedFiles.length > 0) {
+            const firstFile = loadedFiles[0].name;
+            setActiveFileName(firstFile);
+            setOpenTabs(['Welcome', firstFile]);
+          }
+          alert(`Successfully opened folder "${rootFolderName}" with ${loadedFiles.length} files!`);
+        }
+      };
+      reader.readAsText(file);
+    });
   };
 
   const handleCloneRepo = () => {
@@ -863,25 +917,105 @@ export default function App() {
     setShowGitModal(true);
   };
 
-  const handleGitCloneConfirm = () => {
+  const handleGitCloneConfirm = async () => {
     if (!gitRepoUrl.trim()) return;
     const repoUrl = gitRepoUrl.trim();
-    const repoName = repoUrl.split('/').pop()?.replace('.git', '') || 'repo';
-    const clonedFiles = [
-      { name: `${repoName}/README.md`, content: `# Cloned Git Repository: ${repoName}\n\nMock git clone completed successfully from ${repoUrl}.\n`, language: 'markdown' },
-      { name: `${repoName}/app.js`, content: `// Mock main file from cloned repo\nconsole.log("Welcome to ${repoName}!");\n`, language: 'javascript' }
-    ];
+    
+    // Match owner/repo pattern
+    const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\.]+)/);
+    if (!match) {
+      alert("Invalid GitHub URL. Please enter a valid repository URL (e.g. https://github.com/owner/repo).");
+      return;
+    }
+    
+    const owner = match[1];
+    const repoName = match[2].replace('.git', '');
+    
+    setLoadingProgress(10);
+    setLoadingText(`Connecting to ${repoName}...`);
+    setAppLoaded(false);
+    
+    try {
+      let branch = 'main';
+      const repoInfoRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}`);
+      if (repoInfoRes.ok) {
+        const repoInfo = await repoInfoRes.json();
+        branch = repoInfo.default_branch || 'main';
+      }
 
-    setIsFolderOpen(true);
-    localStorage.setItem('prism_folder_open', 'true');
-
-    setFiles(clonedFiles);
-    setEmptyFolders([repoName]);
-    setActiveFileName(`${repoName}/README.md`);
-    setOpenTabs(['Welcome', `${repoName}/README.md`]);
-
-    setGitRepoUrl('');
-    setShowGitModal(false);
+      const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/git/trees/${branch}?recursive=1`);
+      if (!treeRes.ok) {
+        throw new Error("Failed to retrieve repository tree. Is it a public repository?");
+      }
+      
+      const treeData = await treeRes.json();
+      const treeItems = treeData.tree || [];
+      
+      const loadedFiles: VirtualFile[] = [];
+      
+      const fileItems = treeItems.filter((item: any) => item.type === 'blob');
+      const folderItems = treeItems.filter((item: any) => item.type === 'tree').map((item: any) => item.path);
+      
+      let downloadedCount = 0;
+      
+      for (const item of fileItems) {
+        const path = item.path;
+        const rawFileUrl = `https://raw.githubusercontent.com/${owner}/${repoName}/${branch}/${path}`;
+        const fileRes = await fetch(rawFileUrl);
+        
+        let content = '';
+        if (fileRes.ok) {
+          content = await fileRes.text();
+        }
+        
+        loadedFiles.push({
+          name: path,
+          content,
+          language: getLanguageFromExtension(path)
+        });
+        
+        downloadedCount++;
+        setLoadingProgress(Math.min(98, Math.round((downloadedCount / fileItems.length) * 100)));
+        setLoadingText(`Downloading ${path}...`);
+      }
+      
+      if (Capacitor.isNativePlatform()) {
+        for (const folder of folderItems) {
+          await Filesystem.mkdir({
+            path: folder,
+            directory: Directory.Data,
+            recursive: true
+          }).catch(() => {});
+        }
+        for (const file of loadedFiles) {
+          await Filesystem.writeFile({
+            path: file.name,
+            data: file.content,
+            directory: Directory.Data,
+            encoding: Encoding.UTF8,
+            recursive: true
+          }).catch(() => {});
+        }
+      }
+      
+      setFiles(loadedFiles);
+      setEmptyFolders(folderItems);
+      setIsFolderOpen(true);
+      setAppLoaded(true);
+      
+      if (loadedFiles.length > 0) {
+        const first = loadedFiles[0].name;
+        setActiveFileName(first);
+        setOpenTabs(['Welcome', first]);
+      }
+      
+      setGitRepoUrl('');
+      setShowGitModal(false);
+      alert(`Successfully cloned repository "${repoName}" with ${loadedFiles.length} files!`);
+    } catch (err: any) {
+      setAppLoaded(true);
+      alert(`Clone failed: ${err.message}`);
+    }
   };
 
   const handleCreateFolder = () => {
@@ -995,7 +1129,7 @@ export default function App() {
     const commandsList = [
       { name: "Create New File", description: "Open file creation prompt", action: () => { setShowNewFileModal(true); } },
       { name: "Create New Folder", description: "Open folder creation prompt", action: () => { setShowNewFolderModal(true); } },
-      { name: "Open Folder", description: "Open workspace settings directory", action: () => { setShowOpenFolderModal(true); } },
+      {name: "Open Folder", description: "Open project folder from device storage", action: () => { handleOpenFolder(); } },
       { name: "Clone Repository", description: "Import Git repository from remote URL", action: () => { setShowGitModal(true); } },
       { name: "Open Preferences / Editor Settings", description: "Configure fonts, wordwrap, and layout", action: () => { handleOpenSettings(); } },
       { name: "Show Welcome Page", description: "Open startup dashboard", action: () => { handleShowWelcome(); } },
@@ -1031,7 +1165,10 @@ export default function App() {
           localStorage.setItem('prism_terminal_installed', 'true');
           localStorage.setItem('prism_terminal_os', terminalOS);
           setInstallingOS(false);
-          setActiveConsoleTab('terminal');
+          setActiveFileName('Terminal');
+          if (!openTabs.includes('Terminal')) {
+            setOpenTabs(prev => [...prev, 'Terminal']);
+          }
         }, 800);
       } else {
         setInstallProgress(progress);
@@ -1483,31 +1620,9 @@ export default function App() {
   const renderTree = (node: TreeNode, depth: number = 0, isLastChild: boolean = true, parentVerticalLines: boolean[] = []): React.ReactNode => {
     if (node.path === 'workspace') {
       return (
-        <div className="tree-root">
-          <div 
-            className="tree-folder-header root-folder"
-            onClick={() => toggleFolder('workspace')}
-            style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '6px', 
-              padding: '6px 8px', 
-              cursor: 'pointer', 
-              fontWeight: 'bold', 
-              fontSize: '0.85rem',
-              color: 'var(--text-primary)'
-            }}
-          >
-            {expandedFolders['workspace'] !== false ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <Folder size={14} style={{ color: 'var(--accent-secondary)' }} />
-            <span>WORKSPACE</span>
-          </div>
-          {expandedFolders['workspace'] !== false && (
-            <div className="tree-children" style={{ display: 'flex', flexDirection: 'column' }}>
-              {node.children?.map((child, idx, arr) => 
-                renderTree(child, depth + 1, idx === arr.length - 1, [...parentVerticalLines, idx !== arr.length - 1])
-              )}
-            </div>
+        <div className="tree-root" style={{ display: 'flex', flexDirection: 'column' }}>
+          {node.children?.map((child, idx, arr) => 
+            renderTree(child, depth, idx === arr.length - 1, [])
           )}
         </div>
       );
@@ -1631,20 +1746,87 @@ export default function App() {
   return (
     <div className="app-container">
       {/* 1. TOP HEADER NAVBAR */}
-      <header className="header-bar">
+      <header className="header-bar" style={{ position: 'relative' }}>
         <div className="header-logo">
           <Code2 size={24} className="cyan-glow-pulse" style={{ color: 'var(--accent-secondary)' }} />
         </div>
 
-        <div className="header-actions">
+        <div className="header-actions" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {/* Mobile Preview Toggle */}
+          {window.innerWidth <= 768 && (
+            <button
+              className="activity-btn"
+              onClick={() => {
+                setMobileTab(prev => prev === 'editor' ? 'preview' : 'editor');
+                if (mobileTab === 'editor' && !previewUrl) {
+                  handleRunCode();
+                }
+              }}
+              title="Toggle Live Preview"
+              style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-primary)' }}
+            >
+              {mobileTab === 'preview' ? <Code2 size={16} /> : <Eye size={16} />}
+            </button>
+          )}
+
           <button 
-            className="action-btn primary glow-btn-pulse" 
-            onClick={handleRunCode}
-            title="Compile & Run"
+            id="activity-profile-btn"
+            className={`activity-btn ${activePopover === 'profile' ? 'active' : ''}`}
+            onClick={(e) => handleTogglePopover('profile', e)}
+            title="Accounts"
+            style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-primary)' }}
           >
-            <Play size={15} fill="currentColor" />
-            <span>Run</span>
+            <User size={16} />
           </button>
+
+          {/* Profile Floating popover absolute positioned under top right header */}
+          {activePopover === 'profile' && (
+            <div className="activity-popover" style={{ top: '48px', right: '12px', left: 'auto', bottom: 'auto', zIndex: 1000 }} onClick={(e) => e.stopPropagation()}>
+              <div className="popover-header">Account</div>
+              {isLoggedIn ? (
+                <>
+                  <div style={{ padding: '8px 12px', fontSize: '0.8rem', color: 'var(--text-secondary)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    Logged in as: <strong style={{ color: 'var(--accent-success)', display: 'block', marginTop: '2px' }}>{username}</strong>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>{email}</span>
+                  </div>
+                  <button className="popover-item" onClick={() => {
+                    setLoginUsername(username);
+                    setLoginEmail(email);
+                    setShowProfileSettingsModal(true);
+                    setActivePopover(null);
+                  }}>
+                    <span>Profile Settings</span>
+                  </button>
+                  <button className="popover-item" onClick={() => {
+                    setIsLoggedIn(false);
+                    setUsername('');
+                    setEmail('');
+                    localStorage.removeItem('prism_username');
+                    localStorage.removeItem('prism_email');
+                    localStorage.removeItem('prism_logged_in');
+                    setActivePopover(null);
+                    alert("Logged out successfully!");
+                  }} style={{ color: 'var(--accent-error)' }}>
+                    <span>Logout</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ padding: '8px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Not signed in
+                  </div>
+                  <button className="popover-item" onClick={() => {
+                    setLoginUsername('');
+                    setLoginEmail('');
+                    setShowLoginModal(true);
+                    setActivePopover(null);
+                  }}>
+                    <span>Sign In...</span>
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -1689,15 +1871,6 @@ export default function App() {
 
             <div className="activity-group" style={{ gap: '12px', position: 'relative' }}>
               <button 
-                id="activity-profile-btn"
-                className={`activity-btn ${activePopover === 'profile' ? 'active' : ''}`}
-                onClick={(e) => handleTogglePopover('profile', e)}
-                title="Accounts"
-              >
-                <User size={20} />
-              </button>
-              
-              <button 
                 id="activity-settings-btn"
                 className={`activity-btn ${activePopover === 'settings' ? 'active' : ''}`}
                 onClick={(e) => handleTogglePopover('settings', e)}
@@ -1705,22 +1878,6 @@ export default function App() {
               >
                 <Settings size={20} />
               </button>
-
-              {/* Profile Floating popover */}
-              {activePopover === 'profile' && (
-                <div className="activity-popover" style={{ bottom: '52px' }} onClick={(e) => e.stopPropagation()}>
-                  <div className="popover-header">Accounts</div>
-                  <div style={{ padding: '6px 10px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Logged in as <strong style={{ color: 'var(--text-primary)' }}>guest_dev_42</strong>
-                  </div>
-                  <button className="popover-item" onClick={() => alert("Sign in to cloud synchronization...")}>
-                    <span>Sign in to sync settings...</span>
-                  </button>
-                  <button className="popover-item" onClick={() => alert("Virtual Workspace Sync is active.")}>
-                    <span>Sync Settings is On</span>
-                  </button>
-                </div>
-              )}
 
               {/* Settings Floating popover */}
               {activePopover === 'settings' && (
@@ -1733,10 +1890,6 @@ export default function App() {
                   <button className="popover-item" onClick={handleOpenSettings}>
                     <Settings size={14} />
                     <span>Settings</span>
-                  </button>
-                  <button className="popover-item" onClick={handleShowWelcome}>
-                    <Sparkles size={14} />
-                    <span>Welcome Screen</span>
                   </button>
                   <button className="popover-item" onClick={() => { handleRestoreDefaults(); setActivePopover(null); }}>
                     <RefreshCw size={14} />
@@ -1772,7 +1925,7 @@ export default function App() {
                         </p>
                         <button 
                           className="action-btn primary" 
-                          onClick={() => setShowOpenFolderModal(true)} 
+                          onClick={handleOpenFolder} 
                           style={{ width: '100%', marginBottom: 'var(--spacing-sm)', fontSize: '0.75rem', padding: '8px' }}
                         >
                           Open Folder
@@ -1798,7 +1951,7 @@ export default function App() {
                             marginBottom: '6px'
                           }}
                         >
-                          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>WORKSPACE</span>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>PROJECT FILES</span>
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <button 
                               className="file-action-icon-btn" 
@@ -2215,16 +2368,7 @@ export default function App() {
                           Open Terminal in Editor
                         </button>
 
-                        <button 
-                          className="action-btn secondary" 
-                          style={{ width: '100%', fontSize: '0.8rem' }}
-                          onClick={() => {
-                            setActiveConsoleTab('terminal');
-                            alert("Terminal focused in the console tab below!");
-                          }}
-                        >
-                          Focus Bottom Console Terminal
-                        </button>
+
 
                         <button 
                           className="action-btn secondary" 
@@ -2338,6 +2482,19 @@ export default function App() {
 
                 <div className="settings-row">
                   <div className="setting-detail">
+                    <span className="setting-name">Show Welcome Page on Startup</span>
+                    <span className="setting-desc">Show the welcome screen when the application is launched.</span>
+                  </div>
+                  <input 
+                    type="checkbox" 
+                    checked={showWelcomeOnStartup} 
+                    onChange={(e) => setShowWelcomeOnStartup(e.target.checked)} 
+                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                  />
+                </div>
+
+                <div className="settings-row">
+                  <div className="setting-detail">
                     <span className="setting-name">Tab Size</span>
                     <span className="setting-desc">Number of spaces to use for indentation.</span>
                   </div>
@@ -2436,29 +2593,7 @@ export default function App() {
                   {/* welcome terminal option card removed */}
                 </div>
 
-                {/* 2. Recent Section */}
-                <div className="welcome-section">
-                  <h3 className="welcome-section-title">
-                    <RefreshCw size={16} style={{ color: 'var(--accent-primary)' }} />
-                    <span>Recent Project Folders</span>
-                  </h3>
-                  
-                  {recentFolders.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      {recentFolders.map((folder, idx) => (
-                        <div key={idx} className="welcome-recent-item" onClick={() => alert(`Opened folder: ${folder}`)}>
-                          <span>{folder}</span>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Project</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="recent-fallback-text">
-                      No recent folders opened. 
-                      You can <span className="recent-fallback-link" onClick={handleOpenFolder}>open a folder from internal storage</span> to begin.
-                    </p>
-                  )}
-                </div>
+                {/* 2. Recent Section removed */}
               </div>
             </div>
           ) : activeFile ? (
@@ -2505,7 +2640,7 @@ export default function App() {
           )}
         </main>
 
-        {/* SPLIT VIEW (PREVIEW & CONSOLE) FOR DESKTOP */}
+        {/* SPLIT VIEW (PREVIEW) */}
         <section className={`split-workspace ${
           window.innerWidth > 768 ? 'desktop-view' : 
           mobileTab !== 'editor' ? 'mobile-view-active' : 'mobile-view-hidden'
@@ -2537,148 +2672,14 @@ export default function App() {
               ) : (
                 <div className="preview-iframe-placeholder">
                   <Eye size={36} className="placeholder-icon" />
-                  <p style={{ fontSize: '0.875rem' }}>Press Run to load sandbox preview</p>
+                  <p style={{ fontSize: '0.875rem' }}>Select a file and edit code to preview</p>
                 </div>
               )}
             </div>
           </div>
-
-          {/* B. Integrated Console Panel */}
-          <div className={`console-panel ${
-            window.innerWidth <= 768 && mobileTab !== 'console' ? 'mobile-view-hidden' : ''
-          }`}>
-            <div className="console-header">
-              <div className="console-title-container" style={{ gap: '12px' }}>
-                <button 
-                  className={`console-title-tab ${activeConsoleTab === 'logs' ? 'active' : ''}`}
-                  style={{ 
-                    background: 'none', 
-                    border: 'none', 
-                    color: activeConsoleTab === 'logs' ? 'var(--accent-secondary)' : 'var(--text-secondary)',
-                    fontWeight: 600,
-                    fontSize: '0.8rem',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    padding: '0 4px',
-                    borderBottom: activeConsoleTab === 'logs' ? '2px solid var(--accent-secondary)' : 'none',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                  onClick={() => setActiveConsoleTab('logs')}
-                >
-                  <Terminal size={14} />
-                  <span>Console Logs</span>
-                </button>
-
-                {isTerminalInstalled && (
-                  <button 
-                    className={`console-title-tab ${activeConsoleTab === 'terminal' ? 'active' : ''}`}
-                    style={{ 
-                      background: 'none', 
-                      border: 'none', 
-                      color: activeConsoleTab === 'terminal' ? 'var(--accent-success)' : 'var(--text-secondary)',
-                      fontWeight: 600,
-                      fontSize: '0.8rem',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.05em',
-                      padding: '0 4px',
-                      borderBottom: activeConsoleTab === 'terminal' ? '2px solid var(--accent-success)' : 'none',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                    onClick={() => setActiveConsoleTab('terminal')}
-                  >
-                    <Terminal size={14} />
-                    <span>Terminal</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="console-header-actions">
-              {activeConsoleTab === 'logs' && (
-                <button 
-                  className="action-btn secondary" 
-                  style={{ padding: '2px 8px', fontSize: '0.7rem' }} 
-                  onClick={() => setConsoleLogs([])}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            </div>
-
-            {activeConsoleTab === 'logs' ? (
-              <div className="console-logs-list">
-                {consoleLogs.length > 0 ? (
-                  consoleLogs.map((log, idx) => (
-                    <div key={idx} className={`console-log-row ${log.level}`}>
-                      {log.level === 'log' && <Info size={12} style={{ marginTop: '2px' }} />}
-                      {log.level === 'warn' && <AlertTriangle size={12} style={{ marginTop: '2px' }} />}
-                      {log.level === 'error' && <XCircle size={12} style={{ marginTop: '2px' }} />}
-                      
-                      <span className="console-log-timestamp">
-                        {log.timestamp.toLocaleTimeString([], { hour12: false })}
-                      </span>
-                      <span className="console-log-text">{log.text}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="console-empty">No console logs output yet.</div>
-                )}
-              </div>
-            ) : (
-              <div className="console-logs-list" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '0' }}>
-                {isTerminalInstalled ? (
-                  renderTerminalShell()
-                ) : (
-                  <div style={{ padding: 'var(--spacing-md)', display: 'flex', flexDirection: 'column', gap: '8px', color: 'var(--text-secondary)' }}>
-                    <span>Terminal is not installed yet.</span>
-                    <button 
-                      className="action-btn primary" 
-                      style={{ alignSelf: 'flex-start', fontSize: '0.75rem', padding: '4px 10px' }}
-                      onClick={() => { setActiveSidebarTab('terminal'); setSidebarOpen(true); }}
-                    >
-                      Configure & Install OS Terminal
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
         </section>
 
       </div>
-
-      {/* 3. MOBILE BOTTOM NAV BAR */}
-      <nav className="mobile-nav-bar">
-        <button 
-          className={`mobile-nav-tab ${mobileTab === 'editor' ? 'active' : ''}`}
-          onClick={() => setMobileTab('editor')}
-        >
-          <Code2 size={18} />
-          <span>Editor</span>
-        </button>
-        <button 
-          className={`mobile-nav-tab ${mobileTab === 'preview' ? 'active' : ''}`}
-          onClick={() => {
-            setMobileTab('preview');
-            // Auto run code if not run yet
-            if (!previewUrl) handleRunCode();
-          }}
-        >
-          <Eye size={18} />
-          <span>Preview</span>
-        </button>
-        <button 
-          className={`mobile-nav-tab ${mobileTab === 'console' ? 'active' : ''}`}
-          onClick={() => setMobileTab('console')}
-        >
-          <Terminal size={18} />
-          <span>Console ({consoleLogs.length})</span>
-        </button>
-      </nav>
 
       {/* --- MODALS --- */}
       {/* A. Create File Modal */}
@@ -2804,26 +2805,118 @@ export default function App() {
         </div>
       )}
 
-      {/* Open Folder Modal */}
-      {showOpenFolderModal && (
-        <div className="modal-overlay" onClick={() => setShowOpenFolderModal(false)}>
+      {/* Hidden Folder Picker Input */}
+      <input 
+        type="file" 
+        id="folder-picker" 
+        {...{ webkitdirectory: "", directory: "" }}
+        multiple 
+        style={{ display: 'none' }} 
+        onChange={handleFolderSelect}
+      />
+
+      {/* Login Modal */}
+      {showLoginModal && (
+        <div className="modal-overlay" onClick={() => setShowLoginModal(false)}>
           <div className="modal-content animate-fade" onClick={(e) => e.stopPropagation()}>
-            <h3 className="modal-title">Open Project Folder</h3>
-            <input 
-              className="modal-input"
-              type="text" 
-              placeholder="Project folder name..."
-              value={folderToOpenName}
-              onChange={(e) => setFolderToOpenName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleOpenFolderConfirm()}
-              autoFocus
-            />
+            <h3 className="modal-title">Sign In</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', margin: '12px 0' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Username</label>
+                <input 
+                  className="modal-input"
+                  type="text" 
+                  placeholder="Enter username"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('signin-btn')?.click()}
+                  autoFocus
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Email Address</label>
+                <input 
+                  className="modal-input"
+                  type="email" 
+                  placeholder="Enter email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('signin-btn')?.click()}
+                />
+              </div>
+            </div>
             <div className="modal-actions">
-              <button className="action-btn secondary" onClick={() => setShowOpenFolderModal(false)}>
+              <button className="action-btn secondary" onClick={() => setShowLoginModal(false)}>
                 Cancel
               </button>
-              <button className="action-btn primary" onClick={handleOpenFolderConfirm}>
-                Open Folder
+              <button id="signin-btn" className="action-btn primary" onClick={() => {
+                if (!loginUsername.trim() || !loginEmail.trim()) {
+                  alert("Please fill in both fields.");
+                  return;
+                }
+                setUsername(loginUsername);
+                setEmail(loginEmail);
+                setIsLoggedIn(true);
+                localStorage.setItem('prism_username', loginUsername);
+                localStorage.setItem('prism_email', loginEmail);
+                localStorage.setItem('prism_logged_in', 'true');
+                setShowLoginModal(false);
+                alert(`Welcome back, ${loginUsername}!`);
+              }}>
+                Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Profile Settings Modal */}
+      {showProfileSettingsModal && (
+        <div className="modal-overlay" onClick={() => setShowProfileSettingsModal(false)}>
+          <div className="modal-content animate-fade" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Profile Settings</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', margin: '12px 0' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Username</label>
+                <input 
+                  className="modal-input"
+                  type="text" 
+                  placeholder="Enter username"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('profile-save-btn')?.click()}
+                  autoFocus
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Email Address</label>
+                <input 
+                  className="modal-input"
+                  type="email" 
+                  placeholder="Enter email"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('profile-save-btn')?.click()}
+                />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="action-btn secondary" onClick={() => setShowProfileSettingsModal(false)}>
+                Cancel
+              </button>
+              <button id="profile-save-btn" className="action-btn primary" onClick={() => {
+                if (!loginUsername.trim() || !loginEmail.trim()) {
+                  alert("Please fill in both fields.");
+                  return;
+                }
+                setUsername(loginUsername);
+                setEmail(loginEmail);
+                localStorage.setItem('prism_username', loginUsername);
+                localStorage.setItem('prism_email', loginEmail);
+                setShowProfileSettingsModal(false);
+                alert("Profile settings updated!");
+              }}>
+                Save Changes
               </button>
             </div>
           </div>
