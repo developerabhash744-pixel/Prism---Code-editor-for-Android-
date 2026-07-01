@@ -5,6 +5,8 @@ import { githubDark, githubLight } from '@uiw/codemirror-theme-github';
 import { nord } from '@uiw/codemirror-theme-nord';
 import { material } from '@uiw/codemirror-theme-material';
 import { tokyoNight } from '@uiw/codemirror-theme-tokyo-night';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
 
 const themesMap: Record<string, any> = {
   dracula,
@@ -435,6 +437,9 @@ export default function App() {
         setLoadingProgress(100);
         setLoadingText('Prism is ready!');
         clearInterval(interval);
+        if (Capacitor.isNativePlatform()) {
+          loadNativeFilesystem();
+        }
         setTimeout(() => {
           setAppLoaded(true);
         }, 500);
@@ -587,6 +592,17 @@ export default function App() {
       setOpenTabs(prev => [...prev, newFileName]);
     }
     
+    // Write native file to internal storage
+    if (Capacitor.isNativePlatform()) {
+      Filesystem.writeFile({
+        path: newFileName,
+        data: '',
+        directory: Directory.Data,
+        encoding: Encoding.UTF8,
+        recursive: true
+      }).catch(err => console.error("Error creating native file:", err));
+    }
+
     // Auto-expand parents
     const parts = newFileName.split('/');
     if (parts.length > 1) {
@@ -608,6 +624,15 @@ export default function App() {
     if (files.some(f => f.name.toLowerCase() === renameNewName.toLowerCase() && f.name !== renameTargetName)) {
       alert('A file with this name already exists.');
       return;
+    }
+
+    // Rename native file in internal storage
+    if (Capacitor.isNativePlatform()) {
+      Filesystem.rename({
+        from: renameTargetName,
+        to: renameNewName,
+        directory: Directory.Data
+      }).catch(err => console.error("Error renaming native file:", err));
     }
 
     setFiles(prev => prev.map(f => {
@@ -642,6 +667,17 @@ export default function App() {
       }
       return f;
     }));
+
+    // Write file content changes to native internal storage
+    if (Capacitor.isNativePlatform() && activeFileName !== 'Terminal' && activeFileName !== 'Settings') {
+      Filesystem.writeFile({
+        path: activeFileName,
+        data: value,
+        directory: Directory.Data,
+        encoding: Encoding.UTF8,
+        recursive: true
+      }).catch(err => console.error("Error saving file content:", err));
+    }
   };
 
   const handleCloseTab = (tabName: string, e: React.MouseEvent) => {
@@ -856,6 +892,15 @@ export default function App() {
       return;
     }
     setEmptyFolders(prev => [...prev, path]);
+
+    // Create native folder in internal storage
+    if (Capacitor.isNativePlatform()) {
+      Filesystem.mkdir({
+        path: path,
+        directory: Directory.Data,
+        recursive: true
+      }).catch(err => console.error("Error creating native folder:", err));
+    }
     
     // Auto-expand parents
     const parts = path.split('/');
@@ -872,11 +917,29 @@ export default function App() {
 
   const handleDeleteConfirm = () => {
     const fileName = deleteTargetName;
-    const nextFiles = files.filter(f => f.name !== fileName);
-    setFiles(nextFiles);
-    setOpenTabs(prev => prev.filter(t => t !== fileName));
+    
+    if (Capacitor.isNativePlatform()) {
+      const isFolder = emptyFolders.includes(fileName);
+      if (isFolder) {
+        Filesystem.rmdir({
+          path: fileName,
+          directory: Directory.Data,
+          recursive: true
+        }).catch(err => console.error("Error deleting native folder:", err));
+      } else {
+        Filesystem.deleteFile({
+          path: fileName,
+          directory: Directory.Data
+        }).catch(err => console.error("Error deleting native file:", err));
+      }
+    }
 
-    if (activeFileName === fileName) {
+    const nextFiles = files.filter(f => f.name !== fileName && !f.name.startsWith(fileName + '/'));
+    setFiles(nextFiles);
+    setEmptyFolders(prev => prev.filter(f => f !== fileName && !f.startsWith(fileName + '/')));
+    setOpenTabs(prev => prev.filter(t => t !== fileName && !t.startsWith(fileName + '/')));
+
+    if (activeFileName === fileName || activeFileName.startsWith(fileName + '/')) {
       if (nextFiles.length > 0) {
         setActiveFileName(nextFiles[0].name);
       } else {
@@ -1101,6 +1164,17 @@ export default function App() {
         };
         setFiles(prev => [...prev, newFile]);
         
+        // Write native file to internal storage
+        if (Capacitor.isNativePlatform()) {
+          Filesystem.writeFile({
+            path: fullPath,
+            data: '',
+            directory: Directory.Data,
+            encoding: Encoding.UTF8,
+            recursive: true
+          }).catch(err => console.error("Error creating native file via terminal:", err));
+        }
+
         // Auto expand
         const partsTouch = fullPath.split('/');
         if (partsTouch.length > 1) {
@@ -1127,6 +1201,15 @@ export default function App() {
           break;
         }
         setEmptyFolders(prev => [...prev, fullPath]);
+
+        // Create native folder in internal storage
+        if (Capacitor.isNativePlatform()) {
+          Filesystem.mkdir({
+            path: fullPath,
+            directory: Directory.Data,
+            recursive: true
+          }).catch(err => console.error("Error creating native folder via terminal:", err));
+        }
         
         // Auto expand
         const partsMkdir = fullPath.split('/');
@@ -1163,6 +1246,23 @@ export default function App() {
         }
         const fullPath = terminalPath === 'workspace' ? filename : `${terminalPath}/${filename}`;
         const exists = files.some(f => f.name === fullPath);
+
+        // Remove native file/folder in internal storage
+        if (Capacitor.isNativePlatform()) {
+          if (exists) {
+            Filesystem.deleteFile({
+              path: fullPath,
+              directory: Directory.Data
+            }).catch(err => console.error(err));
+          } else if (emptyFolders.includes(fullPath)) {
+            Filesystem.rmdir({
+              path: fullPath,
+              directory: Directory.Data,
+              recursive: true
+            }).catch(err => console.error(err));
+          }
+        }
+
         if (exists) {
           setFiles(prev => prev.filter(f => f.name !== fullPath));
           setOpenTabs(prev => prev.filter(t => t !== fullPath));
@@ -1223,6 +1323,61 @@ export default function App() {
         </form>
       </div>
     );
+  };
+
+  const loadNativeFilesystem = async () => {
+    try {
+      const { files: nativeFiles, folders: nativeFolders } = await readDirRecursive('');
+      if (nativeFiles.length > 0) {
+        setFiles(nativeFiles);
+        setIsFolderOpen(true);
+      }
+      if (nativeFolders.length > 0) {
+        const expanded: Record<string, boolean> = { 'workspace': true };
+        nativeFolders.forEach(folder => {
+          expanded[folder] = true;
+        });
+        setExpandedFolders(prev => ({ ...prev, ...expanded }));
+        setEmptyFolders(nativeFolders);
+      }
+    } catch (err) {
+      console.error("Error loading native files:", err);
+    }
+  };
+
+  const readDirRecursive = async (currentPath: string): Promise<{files: VirtualFile[], folders: string[]}> => {
+    try {
+      const result = await Filesystem.readdir({
+        path: currentPath,
+        directory: Directory.Data
+      });
+      let collectedFiles: VirtualFile[] = [];
+      let collectedFolders: string[] = [];
+      
+      for (const file of result.files) {
+        const relativePath = currentPath === '' ? file.name : `${currentPath}/${file.name}`;
+        if (file.type === 'directory') {
+          collectedFolders.push(relativePath);
+          const sub = await readDirRecursive(relativePath);
+          collectedFiles.push(...sub.files);
+          collectedFolders.push(...sub.folders);
+        } else {
+          const fileContent = await Filesystem.readFile({
+            path: relativePath,
+            directory: Directory.Data,
+            encoding: Encoding.UTF8
+          });
+          collectedFiles.push({
+            name: relativePath,
+            content: fileContent.data as string,
+            language: getLanguageFromExtension(file.name)
+          });
+        }
+      }
+      return { files: collectedFiles, folders: collectedFolders };
+    } catch (e) {
+      return { files: [], folders: [] };
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
