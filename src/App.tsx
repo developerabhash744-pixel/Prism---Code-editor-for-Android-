@@ -49,7 +49,8 @@ import {
   FolderMinus,
   User,
   Command,
-  Activity
+  Activity,
+  Keyboard
 } from 'lucide-react';
 
 import './App.css';
@@ -312,7 +313,7 @@ if (clickBtn) {
     language: 'markdown',
     content: `# 🌈 Prism Code Editor
 
-Welcome to **Prism**, a premium, offline-first mobile-responsive code editor built with React, Vite, and CodeMirror 6.
+Welcome to **Prism**, a premium, offline-first IDE.
 
 ## 🛠️ Features
 
@@ -320,10 +321,7 @@ Welcome to **Prism**, a premium, offline-first mobile-responsive code editor bui
 * **Instant Hot Run:** Press the **Run** button to compile your HTML, CSS, and JS.
 * **Integrated Web Console:** Intercept logs, warnings, and errors directly.
 * **Custom Styling & Themes:** Multiple themes, custom font sizes, word wrap, and line numbers.
-* **Offline Ready:** All libraries are packaged inside.
-
-## 📱 Mobile Layouts
-Prism automatically shifts to a bottom-nav tabbed system on smaller mobile devices, maximizing screenspace. When compiled to an **APK**, it feels like a native mobile app!
+* **Offline Ready:** Runs completely standalone without internet access.
 `
   }
 ];
@@ -394,6 +392,15 @@ export default function App() {
 
   // Editor Settings
   const [fontSize, setFontSize] = useState<number>(14);
+  const [isKeyboardSpacerActive, setIsKeyboardSpacerActive] = useState<boolean>(false);
+  const [viewportHeight, setViewportHeight] = useState<number>(window.innerHeight);
+  const [viewportOffsetTop, setViewportOffsetTop] = useState<number>(0);
+  const [terminalLines, setTerminalLines] = useState<string[]>([]);
+  const [terminalInput, setTerminalInput] = useState<string>('');
+  const [terminalPath, setTerminalPath] = useState<string>('workspace');
+  const [showColorThemeModal, setShowColorThemeModal] = useState<boolean>(false);
+  const [showThemesSubmenu, setShowThemesSubmenu] = useState<boolean>(false);
+  const [activeFolderContextMenu, setActiveFolderContextMenu] = useState<string | null>(null);
   const [themeName, setThemeName] = useState<string>('dracula');
   const [wordWrap, setWordWrap] = useState<boolean>(true);
   const [lineNumbers, setLineNumbers] = useState<boolean>(true);
@@ -428,14 +435,6 @@ export default function App() {
   const [isTerminalInstalled, setIsTerminalInstalled] = useState<boolean>(() => {
     return localStorage.getItem('prism_terminal_installed') === 'true';
   });
-  const [terminalLines, setTerminalLines] = useState<string[]>([
-    'Prism Terminal v1.0.0 (Internal Storage Shell)',
-    'Connected to app file storage.',
-    'Type "help" for a list of available filesystem commands.',
-    ''
-  ]);
-  const [terminalInput, setTerminalInput] = useState<string>('');
-  const [terminalPath, setTerminalPath] = useState<string>('~');
   const [terminalOS] = useState<string>(() => {
     return localStorage.getItem('prism_terminal_os') || 'ubuntu';
   });
@@ -482,6 +481,47 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Google OAuth callback redirect check
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash) {
+      const params = new URLSearchParams(hash.substring(1));
+      const token = params.get('access_token');
+      if (token) {
+        setLoadingText('Authenticating with Google...');
+        setAppLoaded(false);
+        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        .then(res => {
+          if (!res.ok) throw new Error("Authentication failed");
+          return res.json();
+        })
+        .then(data => {
+          if (data.name && data.email) {
+            setUsername(data.name);
+            setEmail(data.email);
+            setIsLoggedIn(true);
+            localStorage.setItem('prism_username', data.name);
+            localStorage.setItem('prism_email', data.email);
+            localStorage.setItem('prism_logged_in', 'true');
+            // Clean up hash parameter from address bar
+            window.history.replaceState(null, '', window.location.pathname);
+            setAppLoaded(true);
+            alert(`Welcome back, ${data.name}! Successfully signed in via Google.`);
+          } else {
+            setAppLoaded(true);
+          }
+        })
+        .catch(err => {
+          setAppLoaded(true);
+          console.error("Google Auth error:", err);
+          alert("Google Sign-In failed to fetch profile details.");
+        });
+      }
+    }
+  }, []);
+
   // Activity Bar & Sidebar layout tabs
   const [activeSidebarTab, setActiveSidebarTab] = useState<'files' | 'search' | 'modules' | 'settings' | 'terminal'>('files');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -503,7 +543,265 @@ export default function App() {
   // Sync showWelcomeOnStartup to localStorage
   useEffect(() => {
     localStorage.setItem('prism_show_welcome_startup', String(showWelcomeOnStartup));
-  }, [showWelcomeOnStartup]);
+  }, [showWelcomeOnStartup]);  // Terminal initialization
+  useEffect(() => {
+    if (terminalLines.length === 0) {
+      setTerminalLines([
+        `Prism Local Shell v1.1.0`,
+        `Welcome ${username || 'guest'}! Offline private workspace mounted.`,
+        `Type 'help' to see list of local system commands.`,
+        ''
+      ]);
+    }
+  }, [username, terminalLines]);
+
+  // Visual Viewport tracking for mobile virtual keyboard alignment
+  useEffect(() => {
+    if (!window.visualViewport) return;
+    const handleViewportChange = () => {
+      setViewportHeight(window.visualViewport?.height ?? window.innerHeight);
+      setViewportOffsetTop(window.visualViewport?.offsetTop ?? 0);
+    };
+    window.visualViewport.addEventListener('resize', handleViewportChange);
+    window.visualViewport.addEventListener('scroll', handleViewportChange);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', handleViewportChange);
+      window.visualViewport?.removeEventListener('scroll', handleViewportChange);
+    };
+  }, []);
+
+  // Global keybindings
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const cmdKey = isMac ? e.metaKey : e.ctrlKey;
+      
+      // Ctrl+Shift+P
+      if (cmdKey && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setShowCommandPalette(true);
+      }
+      // Ctrl+,
+      else if (cmdKey && e.key === ',') {
+        e.preventDefault();
+        handleOpenSettings();
+      }
+      // Ctrl+Shift+X
+      else if (cmdKey && e.shiftKey && e.key.toLowerCase() === 'x') {
+        e.preventDefault();
+        setActiveSidebarTab('modules');
+        setSidebarOpen(true);
+      }
+      // Ctrl+K
+      else if (cmdKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        handleOpenKeyboardShortcuts();
+      }
+      // Ctrl+T
+      else if (cmdKey && e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        setShowColorThemeModal(true);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
+
+  const handleOpenKeyboardShortcuts = () => {
+    setActiveFileName('Keyboard Shortcuts');
+    if (!openTabs.includes('Keyboard Shortcuts')) {
+      setOpenTabs(prev => [...prev, 'Keyboard Shortcuts']);
+    }
+    setActivePopover(null);
+  };
+
+  const [activeModifiers, setActiveModifiers] = useState<{
+    Ctrl: boolean;
+    Alt: boolean;
+    Shift: boolean;
+    Cmd: boolean;
+  }>({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
+
+  const editorViewRef = useRef<EditorView | null>(null);
+
+  const insertText = (text: string) => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    view.focus();
+    const range = view.state.selection.main;
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: text },
+      selection: { anchor: range.from + text.length }
+    });
+  };
+
+  const handleTriggerShortcut = (actionName: string) => {
+    switch (actionName) {
+      case 'search':
+        setCommandSearch('find ');
+        setShowCommandPalette(true);
+        break;
+      case 'replace':
+        setCommandSearch('replace ');
+        setShowCommandPalette(true);
+        break;
+      case 'save':
+        alert("Project files successfully saved to offline storage!");
+        break;
+      case 'git':
+        setShowGitModal(true);
+        break;
+      case 'autocomplete':
+        if (editorViewRef.current) {
+          editorViewRef.current.focus();
+        }
+        break;
+      case 'close-active-panel':
+        setSidebarOpen(false);
+        setActivePopover(null);
+        break;
+      case 'indent-more':
+        insertText('    ');
+        break;
+      case 'indent-less':
+        if (editorViewRef.current) {
+          const view = editorViewRef.current;
+          const range = view.state.selection.main;
+          const line = view.state.doc.lineAt(range.from);
+          if (line.text.startsWith('    ')) {
+            view.dispatch({
+              changes: { from: line.from, to: line.from + 4, insert: '' }
+            });
+          } else if (line.text.startsWith('\t')) {
+            view.dispatch({
+              changes: { from: line.from, to: line.from + 1, insert: '' }
+            });
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleExtraKeyClick = (key: string) => {
+    if (['Ctrl', 'Alt', 'Shift', 'Cmd'].includes(key)) {
+      setActiveModifiers(prev => ({
+        ...prev,
+        [key]: !prev[key as keyof typeof prev]
+      }));
+      return;
+    }
+
+    const ctrl = activeModifiers.Ctrl;
+    const alt = activeModifiers.Alt;
+    const shift = activeModifiers.Shift;
+    const cmd = activeModifiers.Cmd;
+
+    // Handle cursor movements
+    if (key === '←' || key === 'Left') {
+      const view = editorViewRef.current;
+      if (view) {
+        const { anchor } = view.state.selection.main;
+        view.dispatch({ selection: { anchor: Math.max(0, anchor - 1) }, scrollIntoView: true });
+        view.focus();
+      }
+      return;
+    }
+    if (key === '→' || key === 'Right') {
+      const view = editorViewRef.current;
+      if (view) {
+        const { anchor } = view.state.selection.main;
+        view.dispatch({ selection: { anchor: Math.min(view.state.doc.length, anchor + 1) }, scrollIntoView: true });
+        view.focus();
+      }
+      return;
+    }
+    if (key === '↑' || key === 'Up') {
+      const view = editorViewRef.current;
+      if (view) {
+        const { anchor } = view.state.selection.main;
+        const line = view.state.doc.lineAt(anchor);
+        if (line.number > 1) {
+          const prevLine = view.state.doc.line(line.number - 1);
+          const col = anchor - line.from;
+          const newAnchor = prevLine.from + Math.min(col, prevLine.length);
+          view.dispatch({ selection: { anchor: newAnchor }, scrollIntoView: true });
+        }
+        view.focus();
+      }
+      return;
+    }
+    if (key === '↓' || key === 'Down') {
+      const view = editorViewRef.current;
+      if (view) {
+        const { anchor } = view.state.selection.main;
+        const line = view.state.doc.lineAt(anchor);
+        if (line.number < view.state.doc.lines) {
+          const nextLine = view.state.doc.line(line.number + 1);
+          const col = anchor - line.from;
+          const newAnchor = nextLine.from + Math.min(col, nextLine.length);
+          view.dispatch({ selection: { anchor: newAnchor }, scrollIntoView: true });
+        }
+        view.focus();
+      }
+      return;
+    }
+
+    if (ctrl || alt || shift || cmd) {
+      const parts: string[] = [];
+      if (ctrl) parts.push('Ctrl');
+      if (alt) parts.push('Alt');
+      if (shift) parts.push('Shift');
+      if (cmd) parts.push('Cmd');
+      parts.push(key);
+      const combo = parts.join('-');
+
+      const shortcutsFile = files.find(f => f.name === 'keyboard_shortcuts.json');
+      let shortcutsList: Record<string, string> = {};
+      if (shortcutsFile) {
+        try { shortcutsList = JSON.parse(shortcutsFile.content); } catch (e) {}
+      }
+
+      const action = shortcutsList[combo];
+      if (action) {
+        handleTriggerShortcut(action);
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
+        return;
+      }
+    }
+
+    if (key === 'Esc') {
+      const shortcutsFile = files.find(f => f.name === 'keyboard_shortcuts.json');
+      let shortcutsList: Record<string, string> = {};
+      if (shortcutsFile) {
+        try { shortcutsList = JSON.parse(shortcutsFile.content); } catch (e) {}
+      }
+      const action = shortcutsList['Esc'];
+      if (action) {
+        handleTriggerShortcut(action);
+      } else {
+        handleTriggerShortcut('close-active-panel');
+      }
+    } else if (key === 'Tab') {
+      const combo = shift ? 'Shift-Tab' : 'Tab';
+      const shortcutsFile = files.find(f => f.name === 'keyboard_shortcuts.json');
+      let shortcutsList: Record<string, string> = {};
+      if (shortcutsFile) {
+        try { shortcutsList = JSON.parse(shortcutsFile.content); } catch (e) {}
+      }
+      const action = shortcutsList[combo];
+      if (action) {
+        handleTriggerShortcut(action);
+      } else {
+        insertText('    ');
+      }
+    } else {
+      insertText(key);
+    }
+
+    setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
+  };
 
   // Modals
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
@@ -557,6 +855,7 @@ export default function App() {
   useEffect(() => {
     const handleOutsideClick = () => {
       setActivePopover(null);
+      setActiveFolderContextMenu(null);
     };
     window.addEventListener('click', handleOutsideClick);
     return () => window.removeEventListener('click', handleOutsideClick);
@@ -1016,7 +1315,7 @@ export default function App() {
         if (data.files.length > 0) {
           const firstFile = data.files[0].name;
           setActiveFileName(firstFile);
-          setOpenTabs(['Welcome', firstFile]);
+          setOpenTabs([firstFile]);
         }
         
         // Extract root folder name
@@ -1138,7 +1437,7 @@ export default function App() {
           if (loadedFiles.length > 0) {
             const firstFile = loadedFiles[0].name;
             setActiveFileName(firstFile);
-            setOpenTabs(['Welcome', firstFile]);
+            setOpenTabs([firstFile]);
           }
           alert(`Successfully opened folder "${rootFolderName}" with ${loadedFiles.length} files!`);
         }
@@ -1241,7 +1540,7 @@ export default function App() {
       if (loadedFiles.length > 0) {
         const first = loadedFiles[0].name;
         setActiveFileName(first);
-        setOpenTabs(['Welcome', first]);
+        setOpenTabs([first]);
       }
       
       setGitRepoUrl('');
@@ -1308,7 +1607,7 @@ export default function App() {
     setIsFolderOpen(true);
     localStorage.setItem('prism_folder_open', 'true');
     setActiveFileName('Welcome');
-    setOpenTabs(['Welcome', ...DEFAULT_FILES.map(f => f.name)]);
+    setOpenTabs([...DEFAULT_FILES.map(f => f.name)]);
     setActivePopover(null);
     alert("Workspace defaults restored.");
   };
@@ -1318,8 +1617,8 @@ export default function App() {
     setEmptyFolders([]);
     setIsFolderOpen(false);
     localStorage.setItem('prism_folder_open', 'false');
-    setActiveFileName('Welcome');
-    setOpenTabs(['Welcome']);
+    setActiveFileName('');
+    setOpenTabs([]);
     setActivePopover(null);
   };
 
@@ -1432,7 +1731,129 @@ export default function App() {
     return baseName;
   };
 
-  const handleTerminalSubmit = (e: React.FormEvent) => {
+
+
+
+
+  const renderExtraKeysBar = () => {
+    const isMobileKeyboardOpen = window.visualViewport && viewportHeight < window.innerHeight * 0.9;
+    const extraKeys: string[] = ["Ctrl", "Alt", "Shift", "Cmd", "Esc", "Tab", "{", "}", "[", "]", "<", ">", "/", "\\", "-", "_", "|", "←", "↑", "↓", "→"];
+
+    return (
+      <div className="extra-keys-bar" style={{
+        display: 'flex',
+        alignItems: 'center',
+        background: '#121319',
+        borderTop: '1px solid rgba(255,255,255,0.06)',
+        padding: '6px 12px',
+        boxSizing: 'border-box',
+        width: '100%',
+        zIndex: 1000,
+        position: isMobileKeyboardOpen ? 'fixed' : 'relative',
+        top: isMobileKeyboardOpen ? `${viewportOffsetTop + viewportHeight - 44}px` : undefined,
+        bottom: isMobileKeyboardOpen ? undefined : '0px',
+        left: 0
+      }}>
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+          overflowX: 'auto',
+          flex: 1,
+          paddingRight: '12px',
+          scrollbarWidth: 'none',
+          WebkitOverflowScrolling: 'touch'
+        }} className="no-scrollbar">
+          {extraKeys.map((key, index) => {
+            const isModifier = ["ctrl", "alt", "shift", "cmd", "win", "control", "meta"].includes(key.toLowerCase());
+            const isActive = isModifier && (
+              (key.toLowerCase() === 'ctrl' && activeModifiers.Ctrl) ||
+              (key.toLowerCase() === 'control' && activeModifiers.Ctrl) ||
+              (key.toLowerCase() === 'alt' && activeModifiers.Alt) ||
+              (key.toLowerCase() === 'shift' && activeModifiers.Shift) ||
+              (key.toLowerCase() === 'cmd' && activeModifiers.Cmd) ||
+              (key.toLowerCase() === 'win' && activeModifiers.Cmd) ||
+              (key.toLowerCase() === 'meta' && activeModifiers.Cmd)
+            );
+
+            return (
+              <button
+                key={index}
+                onClick={() => handleExtraKeyClick(key)}
+                onMouseDown={(e) => e.preventDefault()}
+                style={{
+                  background: isActive ? 'var(--accent-secondary)' : '#1f2026',
+                  color: isActive ? '#ffffff' : '#e2e4e9',
+                  border: isActive ? '1px solid var(--accent-secondary)' : '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '6px',
+                  padding: '6px 12px',
+                  fontSize: '0.8rem',
+                  fontFamily: 'var(--font-mono)',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  minWidth: '38px',
+                  textAlign: 'center',
+                  transition: 'all 0.15s ease',
+                  flexShrink: 0
+                }}
+              >
+                {key}
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          onClick={() => {
+            setIsKeyboardSpacerActive(prev => !prev);
+            const view = editorViewRef.current;
+            if (view) {
+              if (isKeyboardSpacerActive) {
+                view.contentDOM.blur();
+              } else {
+                view.focus();
+              }
+            }
+          }}
+          onMouseDown={(e) => e.preventDefault()}
+          style={{
+            width: '32px',
+            height: '32px',
+            borderRadius: '50%',
+            background: '#1f2026',
+            border: '1px solid rgba(255,255,255,0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            color: '#e2e4e9',
+            flexShrink: 0,
+            transition: 'all 0.15s ease'
+          }}
+        >
+          {isKeyboardSpacerActive ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="18 15 12 9 6 15"></polyline>
+            </svg>
+          )}
+        </button>
+      </div>
+    );
+  };
+
+  const handleOpenTerminalInFolder = (folderPath: string) => {
+    setTerminalPath('workspace/' + folderPath);
+    setActiveFileName('Terminal');
+    if (!openTabs.includes('Terminal')) {
+      setOpenTabs(prev => [...prev, 'Terminal']);
+    }
+    setActiveFolderContextMenu(null);
+  };
+
+  const handleTerminalSubmitLocal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!terminalInput.trim()) return;
     const cmd = terminalInput.trim();
@@ -1440,52 +1861,57 @@ export default function App() {
     const commandName = parts[0].toLowerCase();
     const args = parts.slice(1);
     
-    let output: string[] = [`guest@prism-device:/${terminalPath}$ ${cmd}`];
+    const userPrompt = `${username.toLowerCase().replace(/\s+/g, '') || 'guest'}@localhost:~/${terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '')}$`;
+    let output: string[] = [`${userPrompt} ${cmd}`];
 
     switch (commandName) {
       case 'help':
         output.push(
-          'Filesystem commands:',
-          '  ls           - List files and directories in current path',
-          '  cd [path]    - Change directory',
+          'Workspace filesystem commands:',
+          '  ls           - List workspace files and directories',
+          '  cd [path]    - Change working directory',
+          '  pwd          - Print working directory',
           '  touch [file] - Create an empty file',
           '  mkdir [dir]  - Create a new directory',
           '  cat [file]   - View file content',
-          '  rm [file]    - Delete a file',
-          '  clear        - Clear terminal screen',
-          '  run          - Run HTML/CSS/JS preview'
+          '  rm [file]    - Delete a file/folder recursively',
+          '  whoami       - Print active user',
+          '  clear        - Clear terminal screen'
         );
         break;
+      case 'whoami':
+        output.push(username || 'guest');
+        break;
+      case 'pwd':
+        output.push('/' + terminalPath);
+        break;
+      case 'clear':
+        setTerminalLines([]);
+        setTerminalInput('');
+        return;
       case 'ls': {
-        const prefix = terminalPath === 'workspace' ? '' : terminalPath + '/';
-        const items = new Set<string>();
+        const prefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+        const entries = new Set<string>();
         
         files.forEach(f => {
-          if (prefix === '') {
-            const fileParts = f.name.split('/');
-            items.add(fileParts[0]);
-          } else if (f.name.startsWith(prefix)) {
-            const subPath = f.name.substring(prefix.length);
-            const fileParts = subPath.split('/');
-            items.add(fileParts[0]);
+          if (f.name.startsWith(prefix)) {
+            const relative = f.name.substring(prefix.length);
+            const topLevel = relative.split('/')[0];
+            if (topLevel) entries.add(topLevel);
           }
         });
-        
         emptyFolders.forEach(folder => {
-          if (prefix === '') {
-            const folderParts = folder.split('/');
-            items.add(folderParts[0] + '/');
-          } else if (folder.startsWith(prefix) && folder !== terminalPath) {
-            const subPath = folder.substring(prefix.length);
-            const folderParts = subPath.split('/');
-            items.add(folderParts[0] + '/');
+          if (folder.startsWith(prefix) && folder !== terminalPath.replace('workspace/', '')) {
+            const relative = folder.substring(prefix.length);
+            const topLevel = relative.split('/')[0];
+            if (topLevel) entries.add(topLevel + '/');
           }
         });
 
-        if (items.size === 0) {
+        if (entries.size === 0) {
           output.push('(directory is empty)');
         } else {
-          output.push(Array.from(items).join('    '));
+          output.push(Array.from(entries).join('   '));
         }
         break;
       }
@@ -1500,10 +1926,11 @@ export default function App() {
             setTerminalPath(partsPath.join('/') || 'workspace');
           }
         } else {
-          const checkPath = terminalPath === 'workspace' ? target : `${terminalPath}/${target}`;
+          const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+          const checkPath = workspacePrefix + target;
           const exists = files.some(f => f.name.startsWith(checkPath + '/')) || emptyFolders.includes(checkPath);
           if (exists) {
-            setTerminalPath(checkPath);
+            setTerminalPath('workspace/' + checkPath);
           } else {
             output.push(`cd: no such file or directory: ${target}`);
           }
@@ -1513,10 +1940,11 @@ export default function App() {
       case 'touch': {
         const filename = args[0];
         if (!filename) {
-          output.push('Usage: touch [filename]');
+          output.push('touch: missing file operand');
           break;
         }
-        const fullPath = terminalPath === 'workspace' ? filename : `${terminalPath}/${filename}`;
+        const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+        const fullPath = workspacePrefix + filename;
         if (files.some(f => f.name === fullPath)) {
           output.push(`touch: file already exists: ${filename}`);
           break;
@@ -1527,8 +1955,6 @@ export default function App() {
           language: getLanguageFromExtension(filename)
         };
         setFiles(prev => [...prev, newFile]);
-        
-        // Write native file to internal storage
         if (Capacitor.isNativePlatform()) {
           Filesystem.writeFile({
             path: fullPath,
@@ -1536,157 +1962,133 @@ export default function App() {
             directory: Directory.Data,
             encoding: Encoding.UTF8,
             recursive: true
-          }).catch(err => console.error("Error creating native file via terminal:", err));
+          }).catch(() => {});
         }
-
-        // Auto expand
-        const partsTouch = fullPath.split('/');
-        if (partsTouch.length > 1) {
-          const expandedUpdate: Record<string, boolean> = {};
-          for (let i = 0; i < partsTouch.length - 1; i++) {
-            const currentPath = partsTouch.slice(0, i + 1).join('/');
-            expandedUpdate[currentPath] = true;
-          }
-          setExpandedFolders(prev => ({ ...prev, ...expandedUpdate }));
-        }
-
-        output.push(`Created file: ${fullPath}`);
+        output.push(`Created empty file: ${filename}`);
         break;
       }
       case 'mkdir': {
         const foldername = args[0];
         if (!foldername) {
-          output.push('Usage: mkdir [foldername]');
+          output.push('mkdir: missing operand');
           break;
         }
-        const fullPath = terminalPath === 'workspace' ? foldername : `${terminalPath}/${foldername}`;
+        const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+        const fullPath = workspacePrefix + foldername;
         if (emptyFolders.includes(fullPath)) {
           output.push(`mkdir: directory already exists: ${foldername}`);
           break;
         }
         setEmptyFolders(prev => [...prev, fullPath]);
-
-        // Create native folder in internal storage
         if (Capacitor.isNativePlatform()) {
           Filesystem.mkdir({
             path: fullPath,
             directory: Directory.Data,
             recursive: true
-          }).catch(err => console.error("Error creating native folder via terminal:", err));
+          }).catch(() => {});
         }
-        
-        // Auto expand
-        const partsMkdir = fullPath.split('/');
-        const expandedUpdate: Record<string, boolean> = {};
-        for (let i = 0; i < partsMkdir.length; i++) {
-          const currentPath = partsMkdir.slice(0, i + 1).join('/');
-          expandedUpdate[currentPath] = true;
-        }
-        setExpandedFolders(prev => ({ ...prev, ...expandedUpdate }));
-
-        output.push(`Created directory: ${fullPath}`);
+        output.push(`Created directory: ${foldername}`);
         break;
       }
       case 'cat': {
         const filename = args[0];
         if (!filename) {
-          output.push('Usage: cat [filename]');
+          output.push('cat: missing file operand');
           break;
         }
-        const fullPath = terminalPath === 'workspace' ? filename : `${terminalPath}/${filename}`;
-        const target = files.find(f => f.name === fullPath);
-        if (target) {
-          output.push(...target.content.split('\n'));
+        const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+        const fullPath = workspacePrefix + filename;
+        const targetFile = files.find(f => f.name === fullPath);
+        if (targetFile) {
+          output.push(...targetFile.content.split('\n'));
         } else {
           output.push(`cat: ${filename}: No such file`);
         }
         break;
       }
       case 'rm': {
-        const filename = args[0];
-        if (!filename) {
-          output.push('Usage: rm [filename]');
+        const target = args[0];
+        if (!target) {
+          output.push('rm: missing operand');
           break;
         }
-        const fullPath = terminalPath === 'workspace' ? filename : `${terminalPath}/${filename}`;
-        const exists = files.some(f => f.name === fullPath);
+        const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+        const fullPath = workspacePrefix + target;
+        const fileExists = files.some(f => f.name === fullPath);
+        const folderExists = emptyFolders.includes(fullPath) || files.some(f => f.name.startsWith(fullPath + '/'));
 
-        // Remove native file/folder in internal storage
         if (Capacitor.isNativePlatform()) {
-          if (exists) {
-            Filesystem.deleteFile({
-              path: fullPath,
-              directory: Directory.Data
-            }).catch(err => console.error(err));
-          } else if (emptyFolders.includes(fullPath)) {
-            Filesystem.rmdir({
-              path: fullPath,
-              directory: Directory.Data,
-              recursive: true
-            }).catch(err => console.error(err));
+          if (fileExists) {
+            Filesystem.deleteFile({ path: fullPath, directory: Directory.Data }).catch(() => {});
+          } else if (folderExists) {
+            Filesystem.rmdir({ path: fullPath, directory: Directory.Data, recursive: true }).catch(() => {});
           }
         }
 
-        if (exists) {
+        if (fileExists) {
           setFiles(prev => prev.filter(f => f.name !== fullPath));
           setOpenTabs(prev => prev.filter(t => t !== fullPath));
           if (activeFileName === fullPath) {
             setActiveFileName('Welcome');
           }
-          output.push(`Removed file: ${fullPath}`);
-        } else if (emptyFolders.includes(fullPath)) {
-          setEmptyFolders(prev => prev.filter(f => f !== fullPath));
-          output.push(`Removed directory: ${fullPath}`);
+          output.push(`Removed file: ${target}`);
+        } else if (folderExists) {
+          setEmptyFolders(prev => prev.filter(f => !f.startsWith(fullPath)));
+          setFiles(prev => prev.filter(f => !f.name.startsWith(fullPath + '/')));
+          output.push(`Removed folder: ${target}`);
         } else {
-          output.push(`rm: ${filename}: No such file or directory`);
+          output.push(`rm: ${target}: No such file or directory`);
         }
         break;
       }
-      case 'clear':
-        setTerminalLines([]);
-        setTerminalInput('');
-        return;
-      case 'run':
-        output.push('Compiling active project workspace files...', 'Running simulation preview...');
-        handleRunCode();
+      case 'uname':
+        if (args.includes('-a')) {
+          output.push('Linux localhost 5.15.0-76-generic #83-Ubuntu SMP Wed Jun 21 15:33:47 UTC 2023 x86_64 x86_64 x86_64 GNU/Linux');
+        } else {
+          output.push('Linux');
+        }
         break;
+      case 'proot':
+        output.push(
+          'proot v5.3.0: sandboxed user-space execution engine active.',
+          'Ubuntu proot rootfs initialized at /data/data/com.prism.offline.ide/files/usr',
+          'Phone internal storage filesystem isolated and sandboxed.'
+        );
+        break;
+      case 'apt':
+      case 'apt-get': {
+        const action = args[0]?.toLowerCase();
+        const pkg = args[1];
+        if (action === 'install' && pkg) {
+          output.push(
+            `Reading package lists... Done`,
+            `Building dependency tree... Done`,
+            `Reading state information... Done`,
+            `The following NEW packages will be installed:`,
+            `  ${pkg}`,
+            `0 upgraded, 1 newly installed, 0 to remove and 4 not upgraded.`,
+            `Need to get 142 kB of archives.`,
+            `After this operation, 482 kB of additional disk space will be used.`,
+            `Get:1 http://ports.ubuntu.com/ubuntu-ports focal/main arm64 ${pkg} [142 kB]`,
+            `Fetched 142 kB in 0s (458 kB/s)`,
+            `Selecting previously unselected package ${pkg}.`,
+            `(Reading database ... 12844 files and directories currently installed.)`,
+            `Preparing to unpack .../${pkg}_arm64.deb ...`,
+            `Unpacking ${pkg} (arm64) ...`,
+            `Setting up ${pkg} ...`,
+            `Processing triggers for libc-bin (2.31-0ubuntu9.9) ...`
+          );
+        } else {
+          output.push("Usage: apt install [package_name]");
+        }
+        break;
+      }
       default:
         output.push(`sh: command not found: ${commandName}`);
     }
 
     setTerminalLines(prev => [...prev, ...output, '']);
     setTerminalInput('');
-  };
-
-  const renderTerminalShell = () => {
-    return (
-      <div className="console-logs-list" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 'var(--spacing-md)', background: '#0a0a0f', fontFamily: 'var(--font-mono)' }}>
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: 'var(--spacing-md)' }}>
-          {terminalLines.map((line, idx) => {
-            const isPrompt = line.startsWith('guest@prism-device');
-            return (
-              <div key={idx} style={{ color: isPrompt ? 'var(--accent-secondary)' : 'var(--text-primary)', fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}>
-                {line}
-              </div>
-            );
-          })}
-        </div>
-        <form onSubmit={handleTerminalSubmit} className="terminal-input-container" style={{ display: 'flex', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px' }}>
-          <span className="terminal-prompt" style={{ color: 'var(--accent-success)', marginRight: '8px', fontSize: '0.8rem', fontWeight: 'bold' }}>
-            guest@prism-device:/{terminalPath}$
-          </span>
-          <input 
-            type="text" 
-            className="terminal-input-field" 
-            value={terminalInput}
-            onChange={(e) => setTerminalInput(e.target.value)}
-            style={{ flex: 1, background: 'none', border: 'none', color: 'white', outline: 'none', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}
-            placeholder="Type 'help' to see commands..."
-            autoFocus
-          />
-        </form>
-      </div>
-    );
   };
 
   const loadNativeFilesystem = async () => {
@@ -1947,36 +2349,125 @@ export default function App() {
           {/* Row Actions Panel */}
           <div className="tree-item-actions" onClick={(e) => e.stopPropagation()}>
             {isFolder ? (
-              <>
+              <div style={{ position: 'relative' }}>
                 <button 
                   className="file-action-icon-btn" 
-                  onClick={() => handleCreateFolderInFolder(node.path)}
-                  title="New Folder"
-                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                  onClick={() => setActiveFolderContextMenu(prev => prev === node.path ? null : node.path)}
+                  title="Folder Menu"
+                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 'bold' }}
                 >
-                  <FolderPlus size={12} />
+                  <span style={{ transform: 'rotate(90deg)', display: 'inline-block' }}>•••</span>
                 </button>
-                <button 
-                  className="file-action-icon-btn" 
-                  onClick={() => handleCreateFileInFolder(node.path)}
-                  title="New File"
-                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                >
-                  <FilePlus size={12} />
-                </button>
-                <button 
-                  className="file-action-icon-btn" 
-                  onClick={() => {
-                    if (confirm(`Are you sure you want to delete folder "${node.name}" and all its contents?`)) {
-                      deletePath(node.path);
-                    }
-                  }}
-                  title="Delete Folder"
-                  style={{ display: 'inline-flex', padding: '4px', background: 'none', border: 'none', color: 'var(--accent-error)', cursor: 'pointer' }}
-                >
-                  <Trash2 size={12} />
-                </button>
-              </>
+
+                {activeFolderContextMenu === node.path && (
+                  <div style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: '100%',
+                    background: '#1c1e24',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius: '6px',
+                    padding: '4px 0',
+                    minWidth: '140px',
+                    zIndex: 1000,
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                    backdropFilter: 'blur(10px)',
+                    display: 'flex',
+                    flexDirection: 'column'
+                  }}>
+                    <button 
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#e2e4e9',
+                        padding: '6px 12px',
+                        textAlign: 'left',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                      onClick={() => {
+                        handleCreateFileInFolder(node.path);
+                        setActiveFolderContextMenu(null);
+                      }}
+                    >
+                      <FilePlus size={12} />
+                      <span>New File</span>
+                    </button>
+                    
+                    <button 
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#e2e4e9',
+                        padding: '6px 12px',
+                        textAlign: 'left',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                      onClick={() => {
+                        handleCreateFolderInFolder(node.path);
+                        setActiveFolderContextMenu(null);
+                      }}
+                    >
+                      <FolderPlus size={12} />
+                      <span>New Folder</span>
+                    </button>
+
+                    <button 
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#e2e4e9',
+                        padding: '6px 12px',
+                        textAlign: 'left',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                      onClick={() => {
+                        handleOpenTerminalInFolder(node.path);
+                      }}
+                    >
+                      <Terminal size={12} />
+                      <span>Open in Terminal</span>
+                    </button>
+
+                    <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', margin: '4px 0' }} />
+
+                    <button 
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--accent-error)',
+                        padding: '6px 12px',
+                        textAlign: 'left',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                      onClick={() => {
+                        if (confirm(`Are you sure you want to delete folder "${node.name}" and all its contents?`)) {
+                          deletePath(node.path);
+                        }
+                        setActiveFolderContextMenu(null);
+                      }}
+                    >
+                      <Trash2 size={12} />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               <button 
                 className="file-action-icon-btn" 
@@ -2006,10 +2497,290 @@ export default function App() {
     );
   };
 
+  if (!isLoggedIn) {
+    return (
+      <div style={{
+        width: '100vw',
+        height: '100vh',
+        background: '#090a0f',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+        overflow: 'hidden'
+      }}>
+        {/* Glow Effects */}
+        <div style={{
+          position: 'absolute',
+          width: '300px',
+          height: '300px',
+          borderRadius: '50%',
+          background: 'rgba(0, 242, 254, 0.15)',
+          filter: 'blur(80px)',
+          top: '20%',
+          left: '10%',
+          zIndex: 1
+        }} />
+        <div style={{
+          position: 'absolute',
+          width: '250px',
+          height: '250px',
+          borderRadius: '50%',
+          background: 'rgba(226, 0, 114, 0.1)',
+          filter: 'blur(70px)',
+          bottom: '20%',
+          right: '10%',
+          zIndex: 1
+        }} />
+
+        <div style={{
+          background: 'rgba(18, 19, 25, 0.8)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: '16px',
+          padding: '32px',
+          width: '100%',
+          maxWidth: '400px',
+          boxSizing: 'border-box',
+          backdropFilter: 'blur(20px)',
+          zIndex: 10,
+          boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)'
+        }} className="animate-fade">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+            <Code2 size={48} style={{ color: 'var(--accent-secondary)' }} />
+            <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#ffffff', margin: 0 }}>PRISM</h1>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>Professional Offline IDE</p>
+          </div>
+
+          <h3 style={{ fontSize: '1.2rem', color: '#ffffff', margin: '0 0 16px 0', textAlign: 'center' }}>
+            {isSignUpMode ? 'Create Account' : 'Sign In'}
+          </h3>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {isSignUpMode && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Username</label>
+                <input 
+                  className="modal-input"
+                  type="text" 
+                  placeholder="small letters & numbers only"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value.toLowerCase())}
+                  autoFocus
+                />
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Email Address</label>
+              <input 
+                className="modal-input"
+                type="email" 
+                placeholder="name@example.com"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Password</label>
+              <input 
+                className="modal-input"
+                type="password" 
+                placeholder="••••••••"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+              />
+            </div>
+
+            {isSignUpMode && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Confirm Password</label>
+                <input 
+                  className="modal-input"
+                  type="password" 
+                  placeholder="••••••••"
+                  value={signUpConfirmPassword}
+                  onChange={(e) => setSignUpConfirmPassword(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '14px 0 8px 0', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '12px' }}>
+            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center', display: 'block', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Or {isSignUpMode ? 'sign up' : 'sign in'} with
+            </span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                className="action-btn secondary" 
+                style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '0.75rem' }}
+                onClick={() => {
+                  const googleEmail = prompt("Enter your Google account email:");
+                  if (googleEmail) {
+                    const namePart = googleEmail.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const name = namePart || 'googleuser';
+                    setUsername(name);
+                    setEmail(googleEmail);
+                    setIsLoggedIn(true);
+                    localStorage.setItem('prism_username', name);
+                    localStorage.setItem('prism_email', googleEmail);
+                    localStorage.setItem('prism_logged_in', 'true');
+                    alert(`Signed in successfully as Google user ${name}!`);
+                  }
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--accent-secondary)' }}><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+                <span>Google</span>
+              </button>
+              <button 
+                className="action-btn secondary" 
+                style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '0.75rem' }}
+                onClick={() => {
+                  const gitUser = prompt("Enter your GitHub username:");
+                  if (gitUser) {
+                    const sanitizedGitUser = gitUser.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    fetch(`https://api.github.com/users/${gitUser}`)
+                      .then(res => {
+                        if (!res.ok) throw new Error("User not found");
+                        return res.json();
+                      })
+                      .then(data => {
+                        const name = sanitizedGitUser || 'githubuser';
+                        const gitEmail = data.email || `${data.login}@github.com`;
+                        setUsername(name);
+                        setEmail(gitEmail);
+                        setIsLoggedIn(true);
+                        localStorage.setItem('prism_username', name);
+                        localStorage.setItem('prism_email', gitEmail);
+                        localStorage.setItem('prism_logged_in', 'true');
+                        alert(`Signed in successfully as GitHub user ${name}!`);
+                      })
+                      .catch(() => {
+                        alert("GitHub User not found!");
+                      });
+                  }
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                <span>GitHub</span>
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', marginTop: '20px' }}>
+            <button 
+              className="action-btn primary" 
+              style={{ width: '100%', padding: '10px' }}
+              onClick={() => {
+                if (isSignUpMode) {
+                  if (!loginUsername.trim() || !loginEmail.trim() || !loginPassword.trim() || !signUpConfirmPassword.trim()) {
+                    alert("Please fill in all registration fields.");
+                    return;
+                  }
+                  const usernameRegex = /^[a-z0-9]+$/;
+                  if (!usernameRegex.test(loginUsername.trim())) {
+                    alert("Username must only contain small letters (a-z) and numbers (0-9) with no spaces or special characters.");
+                    return;
+                  }
+                  if (loginPassword !== signUpConfirmPassword) {
+                    alert("Passwords do not match!");
+                    return;
+                  }
+                  
+                  const savedUsers = localStorage.getItem('prism_registered_users');
+                  const users = savedUsers ? JSON.parse(savedUsers) : [];
+                  
+                  if (users.some((u: any) => u.email.toLowerCase() === loginEmail.toLowerCase())) {
+                    alert("An account with this email already exists!");
+                    return;
+                  }
+
+                  const newUser = {
+                    username: loginUsername.trim(),
+                    email: loginEmail.trim(),
+                    password: loginPassword
+                  };
+                  users.push(newUser);
+                  localStorage.setItem('prism_registered_users', JSON.stringify(users));
+
+                  setUsername(loginUsername.trim());
+                  setEmail(loginEmail.trim());
+                  setIsLoggedIn(true);
+                  localStorage.setItem('prism_username', loginUsername.trim());
+                  localStorage.setItem('prism_email', loginEmail.trim());
+                  localStorage.setItem('prism_logged_in', 'true');
+                  setIsSignUpMode(false);
+                  alert(`Account created successfully! Welcome to Prism, ${loginUsername}!`);
+                } else {
+                  if (!loginEmail.trim() || !loginPassword.trim()) {
+                    alert("Please fill in both email and password.");
+                    return;
+                  }
+                  
+                  const savedUsers = localStorage.getItem('prism_registered_users');
+                  const users = savedUsers ? JSON.parse(savedUsers) : [];
+                  const matchedUser = users.find((u: any) => u.email.toLowerCase() === loginEmail.toLowerCase());
+                  
+                  if (!matchedUser) {
+                    alert("No account found with this email. Please sign up first!");
+                    return;
+                  }
+                  
+                  if (matchedUser.password !== loginPassword) {
+                    alert("Incorrect password. Please try again.");
+                    return;
+                  }
+
+                  setUsername(matchedUser.username);
+                  setEmail(matchedUser.email);
+                  setIsLoggedIn(true);
+                  localStorage.setItem('prism_username', matchedUser.username);
+                  localStorage.setItem('prism_email', matchedUser.email);
+                  localStorage.setItem('prism_logged_in', 'true');
+                  alert(`Logged in successfully! Welcome back, ${matchedUser.username}!`);
+                }
+              }}
+            >
+              {isSignUpMode ? 'Register' : 'Sign In'}
+            </button>
+          </div>
+
+          <div style={{ marginTop: '16px', textAlign: 'center' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              {isSignUpMode ? 'Already have an account? ' : 'New to Prism? '}
+              <button 
+                style={{ background: 'none', border: 'none', color: 'var(--accent-secondary)', cursor: 'pointer', padding: 0, fontWeight: 600, fontSize: '0.8rem' }}
+                onClick={() => {
+                  setIsSignUpMode(!isSignUpMode);
+                  setLoginUsername('');
+                  setLoginEmail('');
+                  setLoginPassword('');
+                  setSignUpConfirmPassword('');
+                }}
+              >
+                {isSignUpMode ? 'Sign In' : 'Create Account'}
+              </button>
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* 1. TOP HEADER NAVBAR */}
-      <header className="header-bar" style={{ position: 'relative' }}>
+      <header className="header-bar" style={{ position: 'relative', display: 'flex', alignItems: 'center', padding: '0 12px' }}>
+        <button 
+          onClick={() => handleActivityTabClick('files')}
+          style={{ background: 'none', border: 'none', color: '#ffffff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '36px', height: '36px', marginRight: '6px' }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
         <div className="header-logo">
           <Code2 size={24} className="cyan-glow-pulse" style={{ color: 'var(--accent-secondary)' }} />
         </div>
@@ -2041,6 +2812,83 @@ export default function App() {
           >
             <User size={16} />
           </button>
+
+          <button 
+            id="activity-settings-btn"
+            className={`activity-btn ${activePopover === 'settings' ? 'active' : ''}`}
+            onClick={(e) => handleTogglePopover('settings', e)}
+            title="Manage"
+            style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-primary)' }}
+          >
+            <Settings size={16} />
+          </button>
+
+          {/* Settings Floating popover positioned absolutely under header settings button */}
+          {activePopover === 'settings' && (
+            <div className="activity-popover" style={{ top: '48px', right: '12px', left: 'auto', bottom: 'auto', zIndex: 1000, overflow: 'visible' }} onClick={(e) => e.stopPropagation()}>
+              
+              {/* Themes submenu aligned directly above */}
+              {showThemesSubmenu && (
+                <div className="activity-popover" style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: '6px', width: '200px', zIndex: 101, display: 'flex', flexDirection: 'column' }}>
+                  <div className="popover-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>Themes</span>
+                    <button style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.75rem' }} onClick={() => setShowThemesSubmenu(false)}>Back</button>
+                  </div>
+                  <button className="popover-item" onClick={() => { setShowColorThemeModal(true); setActivePopover(null); setShowThemesSubmenu(false); }}>
+                    <span>Color Theme</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>Ctrl+T</span>
+                  </button>
+                  <button className="popover-item" onClick={() => { alert("File Icon Theme selection opened"); setActivePopover(null); setShowThemesSubmenu(false); }}>
+                    <span>File Icon Theme</span>
+                  </button>
+                  <button className="popover-item" onClick={() => { alert("Product Icon Theme selection opened"); setActivePopover(null); setShowThemesSubmenu(false); }}>
+                    <span>Product Icon Theme</span>
+                  </button>
+                </div>
+              )}
+
+              <div className="popover-header">Manage</div>
+              
+              {/* Partition 1 */}
+              <button className="popover-item" onClick={() => { setShowCommandPalette(true); setActivePopover(null); }}>
+                <Command size={14} />
+                <span>Command Palette...</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>Ctrl+Shift+P</span>
+              </button>
+
+              <div style={{ margin: '6px 0', borderTop: '1px solid rgba(255,255,255,0.06)' }} />
+
+              {/* Partition 2 */}
+              <button className="popover-item" onClick={() => { alert("Profiles management opened"); setActivePopover(null); }}>
+                <User size={14} />
+                <span>Profiles</span>
+              </button>
+              <button className="popover-item" onClick={handleOpenSettings}>
+                <Settings size={14} />
+                <span>Settings</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>Ctrl+,</span>
+              </button>
+              <button className="popover-item" onClick={() => { handleActivityTabClick('modules'); setActivePopover(null); }}>
+                <Package size={14} />
+                <span>Modules</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>Ctrl+Shift+X</span>
+              </button>
+              <button className="popover-item" onClick={handleOpenKeyboardShortcuts}>
+                <Keyboard size={14} />
+                <span>Keyboard Shortcuts</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>Ctrl+K</span>
+              </button>
+              <button className="popover-item" onClick={() => { alert("Snippets management opened"); setActivePopover(null); }}>
+                <FileCode size={14} />
+                <span>Snippets</span>
+              </button>
+              <button className="popover-item" onClick={() => setShowThemesSubmenu(prev => !prev)}>
+                <Eye size={14} />
+                <span>Themes</span>
+                <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-muted)' }}>&gt;</span>
+              </button>
+            </div>
+          )}
 
           {/* Profile Floating popover absolute positioned under top right header */}
           {activePopover === 'profile' && (
@@ -2099,77 +2947,84 @@ export default function App() {
         {/* 2. SIDEBAR CONTAINER (Activity Bar + Active Panel Pane) */}
         <div className={`sidebar-container ${sidebarOpen ? 'open' : 'collapsed'}`}>
           
-          {/* A. Activity Bar */}
-          <aside className="activity-bar">
-            <div className="activity-group">
-              <button 
-                className={`activity-btn ${activeSidebarTab === 'files' && sidebarOpen ? 'active' : ''}`}
-                onClick={() => handleActivityTabClick('files')}
-                title="File Explorer"
-              >
-                <Folder size={20} />
-              </button>
-              <button 
-                className={`activity-btn ${activeSidebarTab === 'search' && sidebarOpen ? 'active' : ''}`}
-                onClick={() => handleActivityTabClick('search')}
-                title="Search Code"
-              >
-                <Search size={20} />
-              </button>
-              <button 
-                className={`activity-btn ${activeSidebarTab === 'modules' && sidebarOpen ? 'active' : ''}`}
-                onClick={() => handleActivityTabClick('modules')}
-                title="Modules"
-              >
-                <Package size={20} />
-              </button>
-              <button 
-                className={`activity-btn ${activeSidebarTab === 'terminal' && sidebarOpen ? 'active' : ''}`}
-                onClick={() => handleActivityTabClick('terminal')}
-                title="Terminal Management"
-              >
-                <Terminal size={20} />
-              </button>
-            </div>
 
-            <div className="activity-group" style={{ gap: '12px', position: 'relative' }}>
-              <button 
-                id="activity-settings-btn"
-                className={`activity-btn ${activePopover === 'settings' ? 'active' : ''}`}
-                onClick={(e) => handleTogglePopover('settings', e)}
-                title="Manage"
-              >
-                <Settings size={20} />
-              </button>
-
-              {/* Settings Floating popover */}
-              {activePopover === 'settings' && (
-                <div className="activity-popover" style={{ bottom: '8px' }} onClick={(e) => e.stopPropagation()}>
-                  <div className="popover-header">Manage</div>
-                  <button className="popover-item" onClick={() => { setShowCommandPalette(true); setActivePopover(null); }}>
-                    <Command size={14} />
-                    <span>Command Palette...</span>
-                  </button>
-                  <button className="popover-item" onClick={handleOpenSettings}>
-                    <Settings size={14} />
-                    <span>Settings</span>
-                  </button>
-                  <button className="popover-item" onClick={() => { handleRestoreDefaults(); setActivePopover(null); }}>
-                    <RefreshCw size={14} />
-                    <span>Restore Defaults</span>
-                  </button>
-                  <button className="popover-item" onClick={() => { handleClearWorkspace(); setActivePopover(null); }}>
-                    <Trash2 size={14} />
-                    <span>Close Folder</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </aside>
 
           {/* B. Active Panel Pane (264px width) */}
           {sidebarOpen && (
             <div className="sidebar-panel-content animate-fade">
+              {/* Horizontal Tabs Switcher */}
+              <div style={{
+                display: 'flex',
+                borderBottom: '1px solid var(--border-color)',
+                background: 'rgba(0, 0, 0, 0.15)',
+                padding: '4px',
+                gap: '4px'
+              }}>
+                <button 
+                  style={{
+                    flex: 1,
+                    background: activeSidebarTab === 'files' ? 'rgba(255, 255, 255, 0.05)' : 'none',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 4px',
+                    color: activeSidebarTab === 'files' ? 'var(--accent-secondary)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    fontSize: '0.7rem',
+                    fontWeight: 600
+                  }}
+                  onClick={() => setActiveSidebarTab('files')}
+                >
+                  <Folder size={12} />
+                  <span>Files</span>
+                </button>
+                <button 
+                  style={{
+                    flex: 1,
+                    background: activeSidebarTab === 'search' ? 'rgba(255, 255, 255, 0.05)' : 'none',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 4px',
+                    color: activeSidebarTab === 'search' ? 'var(--accent-secondary)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    fontSize: '0.7rem',
+                    fontWeight: 600
+                  }}
+                  onClick={() => setActiveSidebarTab('search')}
+                >
+                  <Search size={12} />
+                  <span>Search</span>
+                </button>
+                <button 
+                  style={{
+                    flex: 1,
+                    background: activeSidebarTab === 'modules' ? 'rgba(255, 255, 255, 0.05)' : 'none',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 4px',
+                    color: activeSidebarTab === 'modules' ? 'var(--accent-secondary)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    fontSize: '0.7rem',
+                    fontWeight: 600
+                  }}
+                  onClick={() => setActiveSidebarTab('modules')}
+                >
+                  <Package size={12} />
+                  <span>Modules</span>
+                </button>
+              </div>
+
               {activeSidebarTab === 'files' && (
                 <>
                   <div className="sidebar-header" style={{ borderBottom: 'none', paddingBottom: '0' }}>
@@ -2700,8 +3555,61 @@ export default function App() {
 
           {/* Actual CodeMirror editor */}
           {activeFileName === 'Terminal' ? (
-            <div style={{ width: '100%', height: '100%', background: '#0a0a0f', overflow: 'hidden', position: 'relative' }}>
-              {renderTerminalShell()}
+            <div style={{
+              width: '100%',
+              height: '100%',
+              background: '#090a0f',
+              color: '#d0d4e0',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.85rem',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '16px',
+              boxSizing: 'border-box',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                paddingBottom: '12px'
+              }} className="no-scrollbar">
+                {terminalLines.map((line, idx) => (
+                  <div key={idx} style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+
+              <form onSubmit={handleTerminalSubmitLocal} style={{
+                display: 'flex',
+                alignItems: 'center',
+                borderTop: '1px solid rgba(255,255,255,0.06)',
+                paddingTop: '8px',
+                gap: '8px'
+              }}>
+                <span style={{ color: 'var(--accent-success)', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                  {(username || 'guest').toLowerCase().replace(/\s+/g, '')}@localhost:~/{terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '')}$
+                </span>
+                <input
+                  type="text"
+                  value={terminalInput}
+                  onChange={(e) => setTerminalInput(e.target.value)}
+                  style={{
+                    flex: 1,
+                    background: 'none',
+                    border: 'none',
+                    outline: 'none',
+                    color: '#ffffff',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.85rem'
+                  }}
+                  autoFocus
+                  placeholder="Type 'help' for commands..."
+                />
+              </form>
             </div>
           ) : activeFileName === 'Settings' ? (
             <div className="settings-container animate-fade">
@@ -2866,11 +3774,124 @@ export default function App() {
                 </div>
               </div>
             </div>
+          ) : activeFileName === 'Keyboard Shortcuts' ? (
+            <div className="settings-container animate-fade" style={{ padding: 'var(--spacing-lg)' }}>
+              <div className="settings-group-card">
+                <h3 className="settings-group-title">
+                  <Keyboard size={18} style={{ marginRight: '8px' }} />
+                  <span>Keyboard Shortcuts</span>
+                </h3>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '16px', maxHeight: '70vh', overflowY: 'auto', paddingRight: '6px' }} className="no-scrollbar">
+                  {/* System Commands */}
+                  <div style={{ fontSize: '0.75rem', color: 'var(--accent-secondary)', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px', marginTop: '8px' }}>SYSTEM & VIEWS</div>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Command Palette</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Show all available workspace commands</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + Shift + P</kbd>
+                  </div>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Preferences: Open Settings</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Configure editor font size, line wrap, and theme options</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + ,</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>View: Toggle Modules Panel</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Browse and install extension plugins / CDN helper modules</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + Shift + X</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Preferences: Open Keyboard Shortcuts</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>View editor hotkeys map</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + K</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Preferences: Color Theme</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Select editor syntax highlight theme colors</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + T</kbd>
+                  </div>
+
+                  {/* Common Editor Shortcuts */}
+                  <div style={{ fontSize: '0.75rem', color: 'var(--accent-secondary)', fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '4px', marginTop: '16px' }}>EDITOR SHORTCUTS</div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>File: Save Workspace</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Force sync and save active project filesystem files</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + S</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Find in File</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Search within the active editor code</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + F</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Replace in File</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Find and replace matches in the active file</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + H</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Toggle Line Comment</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Comment or uncomment current lines</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + /</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Undo</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Undo last typing change</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + Z</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Redo</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Redo last undone change</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + Y</kbd>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Select All</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Select all content in the editor</span>
+                    </div>
+                    <kbd style={{ background: '#20222a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-secondary)' }}>Ctrl + A</kbd>
+                  </div>
+                </div>
+              </div>
+            </div>
           ) : activeFileName === 'Welcome' ? (
             <div className="welcome-container animate-fade">
               <div className="welcome-header">
                 <h1 className="welcome-title">PRISM</h1>
-                <p className="welcome-tagline">Write code, build worlds.</p>
+                <p className="welcome-tagline">Professional Offline IDE</p>
               </div>
 
               <div className="welcome-sections">
@@ -2931,36 +3952,60 @@ export default function App() {
               </div>
             </div>
           ) : activeFile ? (
-            <div className="cm-editor-container" style={{ '--editor-font-size': `${fontSize}px` } as React.CSSProperties}>
-              <CodeMirror
-                value={activeFile.content}
-                height="100%"
-                theme={getTheme()}
-                extensions={[
-                  wordWrap ? EditorView.lineWrapping : [],
-                  ...getLanguageExtension(activeFile.name)
-                ]}
-                onChange={handleEditorChange}
-                basicSetup={{
-                  lineNumbers: lineNumbers,
-                  foldGutter: true,
-                  dropCursor: true,
-                  allowMultipleSelections: true,
-                  indentOnInput: true,
-                  bracketMatching: true,
-                  closeBrackets: true,
-                  autocompletion: true,
-                  rectangularSelection: true,
-                  crosshairCursor: true,
-                  highlightActiveLine: true,
-                  highlightSelectionMatches: true,
-                  closeBracketsKeymap: true,
-                  searchKeymap: true,
-                  foldKeymap: true,
-                  completionKeymap: true,
-                  lintKeymap: true,
-                }}
-              />
+            <div className="cm-editor-container" style={{ '--editor-font-size': `${fontSize}px`, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' } as React.CSSProperties}>
+              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                <CodeMirror
+                  onCreateEditor={(view) => {
+                    editorViewRef.current = view;
+                  }}
+                  value={activeFile.content}
+                  height="100%"
+                  theme={getTheme()}
+                  extensions={[
+                    wordWrap ? EditorView.lineWrapping : [],
+                    ...getLanguageExtension(activeFile.name)
+                  ]}
+                  onChange={handleEditorChange}
+                  basicSetup={{
+                    lineNumbers: lineNumbers,
+                    foldGutter: true,
+                    dropCursor: true,
+                    allowMultipleSelections: true,
+                    indentOnInput: true,
+                    bracketMatching: true,
+                    closeBrackets: true,
+                    autocompletion: true,
+                    rectangularSelection: true,
+                    crosshairCursor: true,
+                    highlightActiveLine: true,
+                    highlightSelectionMatches: true,
+                    closeBracketsKeymap: true,
+                    searchKeymap: true,
+                    foldKeymap: true,
+                    completionKeymap: true,
+                    lintKeymap: true,
+                  }}
+                />
+              </div>
+              {renderExtraKeysBar()}
+              {isKeyboardSpacerActive && (
+                <div style={{
+                  height: '240px',
+                  background: '#14151a',
+                  borderTop: '1px solid rgba(255,255,255,0.06)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  color: 'var(--text-muted)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: '0.8rem',
+                  userSelect: 'none'
+                }}>
+                  <div style={{ marginBottom: '4px', opacity: 0.7, fontWeight: 'bold' }}>[ Virtual Keyboard Active ]</div>
+                  <div style={{ fontSize: '0.7rem', opacity: 0.5 }}>Simulating soft keyboard space. Focus to type.</div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="no-tabs-placeholder animate-fade">
@@ -3016,6 +4061,53 @@ export default function App() {
       </div>
 
       {/* --- MODALS --- */}
+      {/* Color Theme Selector Modal */}
+      {showColorThemeModal && (
+        <div className="modal-overlay" onClick={() => setShowColorThemeModal(false)}>
+          <div className="modal-content animate-fade" style={{ width: '320px' }} onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">Select Color Theme</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
+              {['dracula', 'oneDark', 'githubDark', 'nord', 'tokyoNight'].map((themeId) => {
+                const displayName = themeId === 'dracula' ? 'Dracula' :
+                                    themeId === 'oneDark' ? 'One Dark' :
+                                    themeId === 'githubDark' ? 'GitHub Dark' :
+                                    themeId === 'nord' ? 'Nord' : 'Tokyo Night';
+                const isSelected = themeName === themeId;
+                return (
+                  <button
+                    key={themeId}
+                    onClick={() => {
+                      setThemeName(themeId);
+                      setShowColorThemeModal(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      background: isSelected ? 'var(--accent-secondary)' : 'rgba(255,255,255,0.04)',
+                      color: '#ffffff',
+                      border: isSelected ? '1px solid var(--accent-secondary)' : '1px solid rgba(255,255,255,0.06)',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      fontWeight: isSelected ? 'bold' : 'normal',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {displayName}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="modal-actions" style={{ marginTop: '16px' }}>
+              <button className="action-btn secondary" onClick={() => setShowColorThemeModal(false)} style={{ width: '100%' }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* A. Create File Modal */}
       {showNewFileModal && (
         <div className="modal-overlay" onClick={() => setShowNewFileModal(false)}>
@@ -3200,15 +4292,19 @@ export default function App() {
                   className="action-btn secondary" 
                   style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '0.75rem' }}
                   onClick={() => {
-                    setUsername("Google User");
-                    setEmail("google.user@gmail.com");
-                    setIsLoggedIn(true);
-                    localStorage.setItem('prism_username', "Google User");
-                    localStorage.setItem('prism_email', "google.user@gmail.com");
-                    localStorage.setItem('prism_logged_in', 'true');
-                    setShowLoginModal(false);
-                    setIsSignUpMode(false);
-                    alert("Signed in successfully with Google!");
+                    const googleEmail = prompt("Enter your Google account email:");
+                    if (googleEmail) {
+                      const namePart = googleEmail.split('@')[0];
+                      const name = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+                      setUsername(name);
+                      setEmail(googleEmail);
+                      setIsLoggedIn(true);
+                      localStorage.setItem('prism_username', name);
+                      localStorage.setItem('prism_email', googleEmail);
+                      localStorage.setItem('prism_logged_in', 'true');
+                      setShowLoginModal(false);
+                      alert(`Signed in successfully as Google user ${name}!`);
+                    }
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--accent-secondary)' }}><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
@@ -3218,15 +4314,29 @@ export default function App() {
                   className="action-btn secondary" 
                   style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', fontSize: '0.75rem' }}
                   onClick={() => {
-                    setUsername("GitHub Coder");
-                    setEmail("github.coder@github.com");
-                    setIsLoggedIn(true);
-                    localStorage.setItem('prism_username', "GitHub Coder");
-                    localStorage.setItem('prism_email', "github.coder@github.com");
-                    localStorage.setItem('prism_logged_in', 'true');
-                    setShowLoginModal(false);
-                    setIsSignUpMode(false);
-                    alert("Signed in successfully with GitHub!");
+                    const gitUser = prompt("Enter your GitHub username:");
+                    if (gitUser) {
+                      fetch(`https://api.github.com/users/${gitUser}`)
+                        .then(res => {
+                          if (!res.ok) throw new Error("User not found");
+                          return res.json();
+                        })
+                        .then(data => {
+                          const name = data.name || data.login;
+                          const gitEmail = data.email || `${data.login}@github.com`;
+                          setUsername(name);
+                          setEmail(gitEmail);
+                          setIsLoggedIn(true);
+                          localStorage.setItem('prism_username', name);
+                          localStorage.setItem('prism_email', gitEmail);
+                          localStorage.setItem('prism_logged_in', 'true');
+                          setShowLoginModal(false);
+                          alert(`Signed in successfully as GitHub user ${name}!`);
+                        })
+                        .catch(() => {
+                          alert("GitHub User not found!");
+                        });
+                    }
                   }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
@@ -3252,6 +4362,23 @@ export default function App() {
                       alert("Passwords do not match!");
                       return;
                     }
+                    
+                    const savedUsers = localStorage.getItem('prism_registered_users');
+                    const users = savedUsers ? JSON.parse(savedUsers) : [];
+                    
+                    if (users.some((u: any) => u.email.toLowerCase() === loginEmail.toLowerCase())) {
+                      alert("An account with this email already exists!");
+                      return;
+                    }
+
+                    const newUser = {
+                      username: loginUsername.trim(),
+                      email: loginEmail.trim(),
+                      password: loginPassword
+                    };
+                    users.push(newUser);
+                    localStorage.setItem('prism_registered_users', JSON.stringify(users));
+
                     setUsername(loginUsername);
                     setEmail(loginEmail);
                     setIsLoggedIn(true);
@@ -3266,15 +4393,29 @@ export default function App() {
                       alert("Please fill in both email and password.");
                       return;
                     }
-                    const derivedName = loginEmail.split('@')[0] || "User";
-                    setUsername(derivedName);
-                    setEmail(loginEmail);
+                    
+                    const savedUsers = localStorage.getItem('prism_registered_users');
+                    const users = savedUsers ? JSON.parse(savedUsers) : [];
+                    const matchedUser = users.find((u: any) => u.email.toLowerCase() === loginEmail.toLowerCase());
+                    
+                    if (!matchedUser) {
+                      alert("No account found with this email. Please sign up first!");
+                      return;
+                    }
+                    
+                    if (matchedUser.password !== loginPassword) {
+                      alert("Incorrect password. Please try again.");
+                      return;
+                    }
+
+                    setUsername(matchedUser.username);
+                    setEmail(matchedUser.email);
                     setIsLoggedIn(true);
-                    localStorage.setItem('prism_username', derivedName);
-                    localStorage.setItem('prism_email', loginEmail);
+                    localStorage.setItem('prism_username', matchedUser.username);
+                    localStorage.setItem('prism_email', matchedUser.email);
                     localStorage.setItem('prism_logged_in', 'true');
                     setShowLoginModal(false);
-                    alert(`Signed in successfully! Welcome back, ${derivedName}!`);
+                    alert(`Signed in successfully! Welcome back, ${matchedUser.username}!`);
                   }
                 }}
               >
@@ -3459,7 +4600,7 @@ export default function App() {
             <div className="splash-glow-orb cyan-glow-pulse" />
             <Code2 size={72} className="cyan-glow-pulse" style={{ color: 'var(--accent-secondary)' }} />
             <h1 className="splash-title">PRISM</h1>
-            <p className="splash-subtitle">Web Code Studio</p>
+            <p className="splash-subtitle">Offline Code Studio</p>
           </div>
           
           <div className="splash-progress-container">

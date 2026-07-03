@@ -93,10 +93,18 @@
   display: flex;
   height: 100%;
   background-color: var(--bg-sidebar);
-  border-right: 1px solid var(--border-color);
   z-index: 5;
-  width: 56px;
+  width: 0;
   position: relative;
+  transition: width 0.2s ease;
+}
+.sidebar-container.open {
+  width: 264px;
+  border-right: 1px solid var(--border-color);
+}
+.sidebar-container.collapsed {
+  width: 0;
+  border-right: none;
 }
 
 /* Activity Bar (VS Code style dock) */
@@ -150,7 +158,7 @@
   flex-direction: column;
   height: 100%;
   position: absolute;
-  left: 56px;
+  left: 0;
   top: 0;
   z-index: 50;
   background-color: rgba(19, 21, 28, 0.95);
@@ -1277,3 +1285,11 @@ input:checked + .slider:before {
   }
 }
 
+/* Scrollbar utility classes */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
