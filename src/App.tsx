@@ -6,8 +6,15 @@ import { nord } from '@uiw/codemirror-theme-nord';
 import { material } from '@uiw/codemirror-theme-material';
 import { tokyoNight } from '@uiw/codemirror-theme-tokyo-night';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { FilePicker } from '@capawesome/capacitor-file-picker';
+
+interface PrismShellPlugin {
+  executeCommand(options: { command: string; path: string }): Promise<{ output: string }>;
+  initializeProot(options: { username: string }): Promise<{ status: string }>;
+}
+
+const PrismShell = registerPlugin<PrismShellPlugin>('PrismShell');
 
 const themesMap: Record<string, any> = {
   dracula,
@@ -397,6 +404,7 @@ export default function App() {
   const [viewportOffsetTop, setViewportOffsetTop] = useState<number>(0);
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [terminalInput, setTerminalInput] = useState<string>('');
+  const [terminalMode, setTerminalMode] = useState<'local' | 'proot'>('local');
   const [terminalPath, setTerminalPath] = useState<string>('workspace');
   const [showColorThemeModal, setShowColorThemeModal] = useState<boolean>(false);
   const [showThemesSubmenu, setShowThemesSubmenu] = useState<boolean>(false);
@@ -1923,6 +1931,137 @@ export default function App() {
     setActiveFolderContextMenu(null);
   };
 
+  const handleTerminalSubmitProot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!terminalInput.trim()) return;
+    const cmd = terminalInput.trim();
+    
+    const userPrompt = `${username.toLowerCase().replace(/\s+/g, '') || 'guest'}@localhost:~/${terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '')}$`;
+    setTerminalLines(prev => [...prev, `${userPrompt} ${cmd}`]);
+    setTerminalInput('');
+
+    try {
+      const result = await PrismShell.executeCommand({
+        command: cmd,
+        path: terminalPath
+      });
+      setTerminalLines(prev => [...prev, ...result.output.split('\n'), '']);
+    } catch (error: any) {
+      setTerminalLines(prev => [
+        ...prev,
+        `[Native PrismShell plugin is not loaded. Running in Offline Mock Fallback mode]`,
+        `Error details: ${error.message || error}`
+      ]);
+      
+      const parts = cmd.split(' ');
+      const commandName = parts[0].toLowerCase();
+      const args = parts.slice(1);
+      let output: string[] = [];
+
+      switch (commandName) {
+        case 'help':
+          output.push(
+            'Workspace filesystem commands:',
+            '  ls           - List workspace files and directories',
+            '  cd [path]    - Change working directory',
+            '  pwd          - Print working directory',
+            '  touch [file] - Create an empty file',
+            '  mkdir [dir]  - Create a new directory',
+            '  cat [file]   - View file content',
+            '  rm [file]    - Delete a file/folder recursively',
+            '  whoami       - Print active user',
+            '  clear        - Clear terminal screen'
+          );
+          break;
+        case 'whoami':
+          output.push(username || 'guest');
+          break;
+        case 'pwd':
+          output.push('/' + terminalPath);
+          break;
+        case 'clear':
+          setTerminalLines([]);
+          return;
+        case 'ls': {
+          const prefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+          const entries = new Set<string>();
+          
+          files.forEach(f => {
+            if (f.name.startsWith(prefix)) {
+              const relative = f.name.substring(prefix.length);
+              const topLevel = relative.split('/')[0];
+              if (topLevel) entries.add(topLevel);
+            }
+          });
+          emptyFolders.forEach(folder => {
+            if (folder.startsWith(prefix) && folder !== terminalPath.replace('workspace/', '')) {
+              const relative = folder.substring(prefix.length);
+              const topLevel = relative.split('/')[0];
+              if (topLevel) entries.add(topLevel + '/');
+            }
+          });
+
+          if (entries.size === 0) {
+            output.push('(directory is empty)');
+          } else {
+            output.push(Array.from(entries).join('   '));
+          }
+          break;
+        }
+        case 'cd': {
+          const target = args[0];
+          if (!target || target === '~' || target === '/') {
+            setTerminalPath('workspace');
+          } else if (target === '..') {
+            if (terminalPath !== 'workspace') {
+              const partsPath = terminalPath.split('/');
+              partsPath.pop();
+              setTerminalPath(partsPath.join('/') || 'workspace');
+            }
+          } else {
+            const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+            const checkPath = workspacePrefix + target;
+            const exists = files.some(f => f.name.startsWith(checkPath + '/')) || emptyFolders.includes(checkPath);
+            if (exists) {
+              setTerminalPath('workspace/' + checkPath);
+            } else {
+              output.push(`cd: no such file or directory: ${target}`);
+            }
+          }
+          break;
+        }
+        case 'touch': {
+          const filename = args[0];
+          if (filename) {
+            const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+            const fullPath = workspacePrefix + filename;
+            const newFile = {
+              name: fullPath,
+              content: '',
+              language: getLanguageFromExtension(filename)
+            };
+            setFiles(prev => [...prev, newFile]);
+            output.push(`Created empty file: ${filename}`);
+          }
+          break;
+        }
+        case 'mkdir': {
+          const foldername = args[0];
+          if (foldername) {
+            const workspacePrefix = terminalPath === 'workspace' ? '' : terminalPath.replace('workspace/', '') + '/';
+            const fullPath = workspacePrefix + foldername;
+            setEmptyFolders(prev => [...prev, fullPath]);
+            output.push(`Created directory: ${foldername}`);
+          }
+          break;
+        }
+        default:
+          output.push(`sh: command not found: ${commandName}`);
+      }
+      setTerminalLines(prev => [...prev, ...output, '']);
+    }
+  };
+
   const handleTerminalSubmitLocal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!terminalInput.trim()) return;
@@ -3107,6 +3246,33 @@ export default function App() {
                   <Package size={12} />
                   <span>Modules</span>
                 </button>
+                <button 
+                  style={{
+                    flex: 1,
+                    background: activeSidebarTab === 'terminal' ? 'rgba(255, 255, 255, 0.05)' : 'none',
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '8px 4px',
+                    color: activeSidebarTab === 'terminal' ? 'var(--accent-secondary)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    fontSize: '0.7rem',
+                    fontWeight: 600
+                  }}
+                  onClick={() => {
+                    setActiveSidebarTab('terminal');
+                    setActiveFileName('Terminal');
+                    if (!openTabs.includes('Terminal')) {
+                      setOpenTabs(prev => [...prev, 'Terminal']);
+                    }
+                  }}
+                >
+                  <Terminal size={12} />
+                  <span>Terminal</span>
+                </button>
               </div>
 
               {activeSidebarTab === 'files' && (
@@ -3652,6 +3818,50 @@ export default function App() {
               boxSizing: 'border-box',
               overflow: 'hidden'
             }}>
+              {/* Terminal Type Tab Switcher */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                paddingBottom: '8px',
+                marginBottom: '8px'
+              }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)' }}>TERMINAL SHELL</span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button 
+                    style={{
+                      background: terminalMode === 'local' ? 'var(--accent-secondary)' : 'rgba(255,255,255,0.05)',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '4px 8px',
+                      fontSize: '0.7rem',
+                      color: '#ffffff',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    onClick={() => setTerminalMode('local')}
+                  >
+                    Offline FS
+                  </button>
+                  <button 
+                    style={{
+                      background: terminalMode === 'proot' ? 'var(--accent-secondary)' : 'rgba(255,255,255,0.05)',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '4px 8px',
+                      fontSize: '0.7rem',
+                      color: '#ffffff',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    onClick={() => setTerminalMode('proot')}
+                  >
+                    Ubuntu PRoot
+                  </button>
+                </div>
+              </div>
+
               <div style={{
                 flex: 1,
                 overflowY: 'auto',
@@ -3667,7 +3877,7 @@ export default function App() {
                 ))}
               </div>
 
-              <form onSubmit={handleTerminalSubmitLocal} style={{
+              <form onSubmit={terminalMode === 'local' ? handleTerminalSubmitLocal : handleTerminalSubmitProot} style={{
                 display: 'flex',
                 alignItems: 'center',
                 borderTop: '1px solid rgba(255,255,255,0.06)',
@@ -3691,7 +3901,7 @@ export default function App() {
                     fontSize: '0.85rem'
                   }}
                   autoFocus
-                  placeholder="Type 'help' for commands..."
+                  placeholder={terminalMode === 'local' ? "Type 'help' for commands..." : "Enter native shell command..."}
                 />
               </form>
             </div>
