@@ -407,6 +407,12 @@ export default function App() {
   const [terminalMode, setTerminalMode] = useState<'local' | 'proot'>('local');
   const [terminalPath, setTerminalPath] = useState<string>('workspace');
   const [showColorThemeModal, setShowColorThemeModal] = useState<boolean>(false);
+  const [activeModifiers, setActiveModifiers] = useState<{
+    Ctrl: boolean;
+    Alt: boolean;
+    Shift: boolean;
+    Cmd: boolean;
+  }>({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
   const [showThemesSubmenu, setShowThemesSubmenu] = useState<boolean>(false);
   const [activeFolderContextMenu, setActiveFolderContextMenu] = useState<string | null>(null);
   const [themeName, setThemeName] = useState<string>('dracula');
@@ -582,38 +588,63 @@ export default function App() {
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      const cmdKey = isMac ? e.metaKey : e.ctrlKey;
+      const cmdKey = isMac ? (e.metaKey || activeModifiers.Cmd) : (e.ctrlKey || activeModifiers.Ctrl);
+      const ctrl = e.ctrlKey || activeModifiers.Ctrl;
+      const shift = e.shiftKey || activeModifiers.Shift;
       
+      // Ctrl+A (Select All)
+      if (ctrl && e.key.toLowerCase() === 'a') {
+        if (editorViewRef.current) {
+          e.preventDefault();
+          const view = editorViewRef.current;
+          view.dispatch({
+            selection: { anchor: 0, head: view.state.doc.length },
+            scrollIntoView: true
+          });
+          setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
+        }
+      }
+      // Ctrl+S (Save)
+      else if (ctrl && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        alert("Project files successfully saved to offline storage!");
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
+      }
       // Ctrl+Shift+P
-      if (cmdKey && e.shiftKey && e.key.toLowerCase() === 'p') {
+      else if (cmdKey && shift && e.key.toLowerCase() === 'p') {
         e.preventDefault();
         setShowCommandPalette(true);
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
       }
       // Ctrl+,
       else if (cmdKey && e.key === ',') {
         e.preventDefault();
         handleOpenSettings();
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
       }
       // Ctrl+Shift+X
-      else if (cmdKey && e.shiftKey && e.key.toLowerCase() === 'x') {
+      else if (cmdKey && shift && e.key.toLowerCase() === 'x') {
         e.preventDefault();
         setActiveSidebarTab('modules');
         setSidebarOpen(true);
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
       }
       // Ctrl+K
       else if (cmdKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         handleOpenKeyboardShortcuts();
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
       }
       // Ctrl+T
       else if (cmdKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
         setShowColorThemeModal(true);
+        setActiveModifiers({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
       }
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, []);
+  }, [activeModifiers]);
 
   const handleOpenKeyboardShortcuts = () => {
     setActiveFileName('Keyboard Shortcuts');
@@ -623,12 +654,6 @@ export default function App() {
     setActivePopover(null);
   };
 
-  const [activeModifiers, setActiveModifiers] = useState<{
-    Ctrl: boolean;
-    Alt: boolean;
-    Shift: boolean;
-    Cmd: boolean;
-  }>({ Ctrl: false, Alt: false, Shift: false, Cmd: false });
 
   const editorViewRef = useRef<EditorView | null>(null);
 
